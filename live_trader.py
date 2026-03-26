@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 FULL_REFRESH_INTERVAL = 1800  # 30 minutes
 
 # Minimum seconds between trades on the same symbol (avoids thrashing)
-TRADE_COOLDOWN = 300  # 5 minutes
+TRADE_COOLDOWN = 120  # 2 minutes (was 5)
 
 # Valid symbols set for fast lookup in the bar handler
 _VALID_SYMBOLS = set(CRYPTO_UNIVERSE)
