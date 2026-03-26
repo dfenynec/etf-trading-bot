@@ -1,0 +1,95 @@
+import logging
+
+from alpaca.trading.client import TradingClient
+from alpaca.trading.requests import MarketOrderRequest
+from alpaca.trading.enums import OrderSide, TimeInForce
+
+from config import ALPACA_API_KEY, ALPACA_SECRET_KEY, PAPER_TRADING
+
+logger = logging.getLogger(__name__)
+
+
+class AlpacaTrader:
+    def __init__(self):
+        if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
+            raise ValueError("Missing ALPACA_API_KEY or ALPACA_SECRET_KEY in .env file")
+
+        self.client = TradingClient(
+            ALPACA_API_KEY,
+            ALPACA_SECRET_KEY,
+            paper=PAPER_TRADING,
+        )
+        mode = "PAPER" if PAPER_TRADING else "LIVE"
+        logger.info(f"AlpacaTrader initialized in {mode} mode")
+
+    # --- Account ---
+
+    def get_account(self):
+        return self.client.get_account()
+
+    def get_portfolio_value(self) -> float:
+        return float(self.get_account().portfolio_value)
+
+    def get_cash(self) -> float:
+        return float(self.get_account().cash)
+
+    def is_market_open(self) -> bool:
+        return self.client.get_clock().is_open
+
+    # --- Positions ---
+
+    def get_positions(self) -> dict:
+        """Returns {ticker: position_object} for all open positions."""
+        return {p.symbol: p for p in self.client.get_all_positions()}
+
+    def get_position(self, ticker: str):
+        try:
+            return self.client.get_open_position(ticker)
+        except Exception:
+            return None
+
+    # --- Orders ---
+
+    def buy(self, ticker: str, qty: int) -> bool:
+        """Place a market buy order."""
+        try:
+            order = MarketOrderRequest(
+                symbol=ticker,
+                qty=qty,
+                side=OrderSide.BUY,
+                time_in_force=TimeInForce.DAY,
+            )
+            result = self.client.submit_order(order)
+            logger.info(f"BUY submitted: {qty}x {ticker} | Order ID: {result.id}")
+            return True
+        except Exception as e:
+            logger.error(f"BUY failed for {ticker}: {e}")
+            return False
+
+    def sell(self, ticker: str, qty: int = None) -> bool:
+        """
+        Sell shares of a ticker.
+        If qty is None, closes the entire position.
+        """
+        try:
+            if qty is None:
+                self.client.close_position(ticker)
+                logger.info(f"Closed full position in {ticker}")
+            else:
+                order = MarketOrderRequest(
+                    symbol=ticker,
+                    qty=qty,
+                    side=OrderSide.SELL,
+                    time_in_force=TimeInForce.DAY,
+                )
+                self.client.submit_order(order)
+                logger.info(f"SELL submitted: {qty}x {ticker}")
+            return True
+        except Exception as e:
+            logger.error(f"SELL failed for {ticker}: {e}")
+            return False
+
+    def close_all_positions(self) -> None:
+        """Emergency: close everything."""
+        logger.warning("Closing ALL positions!")
+        self.client.close_all_positions(cancel_orders=True)
