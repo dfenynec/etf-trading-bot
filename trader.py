@@ -39,8 +39,9 @@ class AlpacaTrader:
         return float(self.get_account().buying_power)
 
     def get_crypto_buying_power(self) -> float:
-        """Buying power for non-marginable assets (crypto). No margin applied."""
-        return float(self.get_account().non_marginable_buying_power)
+        """Available cash for crypto trading. Uses cash balance with a 0.5%
+        safety buffer to absorb rounding differences at order time."""
+        return float(self.get_account().cash) * 0.995
 
     def is_market_open(self) -> bool:
         return self.client.get_clock().is_open

@@ -10,6 +10,7 @@ Flow per bar:
   4. Trade immediately if signal crosses threshold (with 5-min cooldown)
   5. Every 30 min: refresh base data from yfinance in background
 """
+import math
 import threading
 import time
 import logging
@@ -163,11 +164,13 @@ class LiveCryptoTrader:
 
             portfolio_value  = self.trader.get_portfolio_value()
             crypto_bp        = self.trader.get_crypto_buying_power()
-            max_dollars      = min(portfolio_value * MAX_CRYPTO_POSITION_PCT, crypto_bp)
-            qty              = round(max_dollars / price, 6)
+            # Apply 2% buffer: accounts for bid/ask spread + rounding.
+            # Use floor (not round) so qty * price never exceeds max_dollars.
+            max_dollars      = min(portfolio_value * MAX_CRYPTO_POSITION_PCT, crypto_bp * 0.98)
+            qty              = math.floor(max_dollars / price * 1_000_000) / 1_000_000
 
-            if qty * price > crypto_bp:
-                logger.info(f"[LIVE] Skip {symbol}: not enough cash")
+            if qty <= 0:
+                logger.info(f"[LIVE] Skip {symbol}: not enough cash (bp=${crypto_bp:.2f})")
                 return
 
             stop = calculate_stop_loss(price, atr)

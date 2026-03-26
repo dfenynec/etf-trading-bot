@@ -24,8 +24,8 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
       OBV       — On-Balance Volume trend (directional volume pressure)
       Supertrend — ATR-based trend-following signal
     """
-    if df.empty or len(df) < SMA_LONG + 10:
-        logger.warning("Not enough data to calculate all indicators")
+    if df.empty or len(df) < SMA_SHORT + 30:
+        logger.warning(f"Not enough data for {len(df)} rows (need at least {SMA_SHORT + 30}) — skipping")
         return pd.DataFrame()
 
     df = df.copy()
@@ -109,7 +109,9 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
     # ------------------------------------------------------------------
     df["supertrend"] = _calculate_supertrend(df, period=10, multiplier=3.0)
 
-    return df.dropna()
+    # Drop rows where fast indicators are NaN. SMA_LONG (200) may be NaN
+    # for coins with shorter history — that's fine, score_etf handles it.
+    return df.dropna(subset=["rsi", "macd", "ema_9", "ema_21", "adx", "obv", "atr", "supertrend"])
 
 
 def _calculate_supertrend(df: pd.DataFrame, period: int = 10, multiplier: float = 3.0) -> pd.Series:
