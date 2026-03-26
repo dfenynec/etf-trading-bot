@@ -140,7 +140,12 @@ class LiveCryptoTrader:
 
             portfolio_value = self.trader.get_portfolio_value()
             cash = self.trader.get_cash()
-            qty = round((portfolio_value * MAX_CRYPTO_POSITION_PCT) / price, 6)
+            from risk_manager import calculate_position_size
+            dollars = calculate_position_size(
+                portfolio_value, price,
+                score=signal["score"], atr=atr
+            ) * price
+            qty = round(min(dollars, portfolio_value * MAX_CRYPTO_POSITION_PCT) / price, 6)
 
             if qty * price > cash:
                 logger.info(f"[LIVE] Skip {symbol}: not enough cash")

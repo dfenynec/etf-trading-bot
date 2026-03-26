@@ -125,7 +125,8 @@ def run_etf_strategy() -> None:
 
         price = candidate["price"]
         atr   = candidate["atr"]
-        qty   = calculate_position_size(portfolio_value, price)
+        score = candidate["score"]
+        qty   = calculate_position_size(portfolio_value, price, score=score, atr=atr)
         cost  = qty * price
 
         if cost > cash:
@@ -134,7 +135,7 @@ def run_etf_strategy() -> None:
 
         stop = calculate_stop_loss(price, atr)
         tp   = calculate_take_profit(price, atr)
-        logger.info(f"  → BUY  {qty}x {ticker} @ ~${price:.4f} | Stop: ${stop} | Target: ${tp} | Score: {candidate['score']}")
+        logger.info(f"  → BUY  {qty}x {ticker} @ ~${price:.4f} | Stop: ${stop} | Target: ${tp} | Score: {score}")
 
         if trader.buy(ticker, qty):
             long_positions[ticker] = None
@@ -150,7 +151,8 @@ def run_etf_strategy() -> None:
 
         price = candidate["price"]
         atr   = candidate["atr"]
-        qty   = calculate_position_size(portfolio_value, price)
+        score = candidate["score"]
+        qty   = calculate_position_size(portfolio_value, price, score=score, atr=atr)
         cost  = qty * price
 
         if cost > cash:
@@ -159,7 +161,7 @@ def run_etf_strategy() -> None:
 
         stop = calculate_take_profit(price, atr)  # Stop is ABOVE entry for shorts
         tp   = calculate_stop_loss(price, atr)     # Target is BELOW entry for shorts
-        logger.info(f"  → SHORT {qty}x {ticker} @ ~${price:.4f} | Stop: ${stop} | Target: ${tp} | Score: {candidate['score']}")
+        logger.info(f"  → SHORT {qty}x {ticker} @ ~${price:.4f} | Stop: ${stop} | Target: ${tp} | Score: {score}")
 
         if trader.short(ticker, qty):
             short_positions[ticker] = None

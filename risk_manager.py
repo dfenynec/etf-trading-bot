@@ -1,17 +1,54 @@
 import logging
 
-from config import MAX_POSITIONS, MAX_POSITION_PCT, STOP_LOSS_ATR_MULT, TAKE_PROFIT_ATR_MULT
+from config import MAX_POSITIONS, MAX_POSITION_PCT, STOP_LOSS_ATR_MULT, TAKE_PROFIT_ATR_MULT, MIN_BUY_SCORE
 
 logger = logging.getLogger(__name__)
 
+# Minimum allocation per trade (% of portfolio)
+_BASE_PCT = 0.10
 
-def calculate_position_size(portfolio_value: float, price: float) -> int:
+# How much extra allocation per score point above the minimum threshold
+_SCORE_STEP = 0.02
+
+
+def calculate_position_size(
+    portfolio_value: float,
+    price: float,
+    score: int = 0,
+    atr: float = 0.0,
+) -> int:
     """
-    Calculate how many shares to buy.
-    Limits each position to MAX_POSITION_PCT of total portfolio value.
+    Dynamic position sizing based on signal strength and volatility.
+
+    Allocation scales with score:
+      MIN_BUY_SCORE (2) → 10%  (base)
+      score 3           → 12%
+      score 4           → 14%
+      score 5           → 16%
+      score 6           → 18%
+      score 7+          → 20%  (MAX_POSITION_PCT cap)
+
+    Volatility adjustment:
+      If ATR/price > 3%, scale the allocation down proportionally.
+      High volatility = smaller position = same dollar risk per trade.
     """
-    max_dollars = portfolio_value * MAX_POSITION_PCT
+    # Score-based allocation (capped at MAX_POSITION_PCT)
+    score_bonus = max(0, abs(score) - MIN_BUY_SCORE) * _SCORE_STEP
+    allocation_pct = min(_BASE_PCT + score_bonus, MAX_POSITION_PCT)
+
+    # Volatility adjustment: scale down if ATR is large relative to price
+    if atr > 0 and price > 0:
+        atr_pct = atr / price
+        if atr_pct > 0.03:                        # ATR > 3% of price
+            allocation_pct *= 0.03 / atr_pct      # Inverse-scale to keep risk constant
+
+    max_dollars = portfolio_value * allocation_pct
     shares = int(max_dollars / price)
+
+    logger.debug(
+        f"Position size: score={score} atr_pct={atr/price*100:.1f}% "
+        f"allocation={allocation_pct*100:.1f}% → {shares} shares @ ${price:.4f}"
+    )
     return max(1, shares)
 
 
