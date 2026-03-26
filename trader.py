@@ -37,6 +37,38 @@ class AlpacaTrader:
     def get_cash(self) -> float:
         return float(self.get_account().cash)
 
+    def get_daily_pnl_pct(self) -> float:
+        """Today's P&L as a fraction of yesterday's closing equity.
+        Alpaca provides last_equity = equity at the previous day's close."""
+        account = self.get_account()
+        current = float(account.equity)
+        last    = float(account.last_equity)
+        return (current - last) / last if last else 0.0
+
+    def move_stop_to_breakeven(self, symbol: str, entry_price: float) -> bool:
+        """Find the open stop order for a position and move it to entry_price."""
+        try:
+            from alpaca.trading.requests import GetOrdersRequest, ReplaceOrderRequest
+            from alpaca.trading.enums import QueryOrderStatus
+
+            orders = self.client.get_orders(
+                filter=GetOrdersRequest(status=QueryOrderStatus.OPEN, symbols=[symbol])
+            )
+            stop_order = next((o for o in orders if str(o.type).lower() == "stop"), None)
+            if not stop_order:
+                logger.warning(f"No open stop order found for {symbol} — breakeven not set")
+                return False
+
+            self.client.replace_order(
+                order_id=stop_order.id,
+                order_data=ReplaceOrderRequest(stop_price=round(entry_price, 4)),
+            )
+            logger.info(f"Breakeven stop set: {symbol} → ${entry_price:.4f}")
+            return True
+        except Exception as e:
+            logger.error(f"Breakeven failed for {symbol}: {e}")
+            return False
+
     def get_buying_power(self) -> float:
         """Buying power for marginable assets (ETFs). Accounts for margin,
         pending orders, and short position reserves."""

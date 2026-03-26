@@ -67,6 +67,16 @@ MAX_CRYPTO_POSITIONS = 3       # Max concurrent crypto positions (reduced from 5
 MAX_CRYPTO_POSITION_PCT = 0.08 # Max 8% per crypto position (lower — crypto is more volatile)
 CRYPTO_RUN_INTERVAL_MINUTES = 30  # Check crypto every 30 minutes
 
+# --- Risk circuit breakers ---
+DAILY_LOSS_LIMIT_PCT  = 0.03  # Halt all new trades if daily P&L drops below -3%
+BREAKEVEN_ATR_TRIGGER = 1.0   # Move stop to entry when profit >= 1x ATR (lock in breakeven)
+
+# --- Correlation filter ---
+BTC_CORRELATION_FILTER = True # Suppress altcoin BUYs when BTC score is negative
+
+# --- Performance ---
+POSITION_CACHE_TTL = 30       # Seconds to cache get_positions() (reduces API calls)
+
 # --- Bot settings ---
 LOOKBACK_DAYS = 300           # Days of history to fetch for indicators
 RUN_INTERVAL_MINUTES = 60     # How often the ETF strategy runs (during market hours)

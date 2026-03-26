@@ -1,3 +1,4 @@
+import math
 import pandas as pd
 import logging
 
@@ -73,8 +74,7 @@ def score_etf(df: pd.DataFrame, ticker: str) -> dict:
     # (MACD and EMA 9/21 already capture moving average relationships;
     #  scoring SMA 50/200 too would triple-count the same signal)
     # ------------------------------------------------------------------
-    import math as _math
-    if not _math.isnan(float(latest["sma_long"])):
+    if not math.isnan(float(latest["sma_long"])):
         sma_trend = "above" if latest["sma_short"] > latest["sma_long"] else "below"
         reasons.append(f"SMA50 {sma_trend} SMA200 (reference only)")
     else:
@@ -170,18 +170,17 @@ def score_etf(df: pd.DataFrame, ticker: str) -> dict:
     adx_value = latest["adx"]
     trending = adx_value >= ADX_TREND_THRESHOLD
 
-    if not trending:
-        # Market is directionless — halve the score and cap at HOLD
-        original_score = score
-        score = score // 2
-        reasons.insert(0, f"⚠ ADX {adx_value:.1f} < {ADX_TREND_THRESHOLD} (choppy market — score halved from {original_score})")
-
     # ------------------------------------------------------------------
     # Final signal
     # ------------------------------------------------------------------
-    if trending and score >= MIN_BUY_SCORE:
+    if not trending:
+        # Hard HOLD in choppy/ranging markets — no half-measures.
+        # Score is still shown for information but we never enter a trade.
+        signal = "HOLD"
+        reasons.insert(0, f"ADX {adx_value:.1f} < {ADX_TREND_THRESHOLD} — choppy market, HOLD forced")
+    elif score >= MIN_BUY_SCORE:
         signal = "BUY"
-    elif trending and score <= MIN_SELL_SCORE:
+    elif score <= MIN_SELL_SCORE:
         signal = "SELL"
     else:
         signal = "HOLD"

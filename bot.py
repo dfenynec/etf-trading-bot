@@ -17,7 +17,7 @@ import schedule
 
 from config import (
     ETF_UNIVERSE, RUN_INTERVAL_MINUTES,
-    MAX_POSITIONS, MAX_SHORT_POSITIONS,
+    MAX_POSITIONS, MAX_SHORT_POSITIONS, DAILY_LOSS_LIMIT_PCT,
 )
 from data_fetcher import fetch_all_etfs
 from indicators import calculate_indicators
@@ -25,6 +25,7 @@ from risk_manager import calculate_position_size, calculate_stop_loss, calculate
 from strategy import rank_buy_candidates, rank_sell_candidates, score_etf
 from trader import AlpacaTrader
 from live_trader import LiveCryptoTrader
+from trade_journal import log_trade
 
 # --- Logging setup ---
 logging.basicConfig(
@@ -70,6 +71,15 @@ def run_etf_strategy() -> None:
         logger.info("Market is closed. Skipping ETF run.")
         return
 
+    # Daily loss circuit breaker
+    daily_pnl = trader.get_daily_pnl_pct()
+    if daily_pnl < -DAILY_LOSS_LIMIT_PCT:
+        logger.warning(
+            f"[RISK] Daily loss limit hit ({daily_pnl*100:.2f}%) — "
+            f"skipping ETF run to protect capital"
+        )
+        return
+
     portfolio_value  = trader.get_portfolio_value()
     buying_power     = trader.get_buying_power()
 
@@ -97,7 +107,8 @@ def run_etf_strategy() -> None:
         sig = next((s for s in signals if s["ticker"] == ticker), None)
         if sig and sig["signal"] == "SELL":
             logger.info(f"  → SELL LONG {ticker} (score {sig['score']})")
-            trader.sell(ticker)
+            if trader.sell(ticker):
+                log_trade("SELL", ticker, 0, sig["price"], sig["score"], note="Signal exit")
         else:
             logger.info(f"  → Hold long {ticker} (score {sig['score'] if sig else 'N/A'})")
 
@@ -106,7 +117,8 @@ def run_etf_strategy() -> None:
         sig = next((s for s in signals if s["ticker"] == ticker), None)
         if sig and sig["signal"] == "BUY":
             logger.info(f"  → COVER SHORT {ticker} (score {sig['score']})")
-            trader.cover(ticker)
+            if trader.cover(ticker):
+                log_trade("COVER", ticker, 0, sig["price"], sig["score"], note="Signal exit")
         else:
             logger.info(f"  → Hold short {ticker} (score {sig['score'] if sig else 'N/A'})")
 
@@ -140,6 +152,7 @@ def run_etf_strategy() -> None:
         if trader.buy(ticker, qty, stop_loss=stop, take_profit=tp):
             long_positions[ticker] = None
             buying_power -= cost
+            log_trade("BUY", ticker, qty, price, score, stop, tp)
 
     # --- Open new SHORT positions ---
     for candidate in rank_sell_candidates(signals):
@@ -166,6 +179,7 @@ def run_etf_strategy() -> None:
         if trader.short(ticker, qty, stop_loss=stop, take_profit=tp):
             short_positions[ticker] = None
             buying_power -= cost
+            log_trade("SHORT", ticker, qty, price, score, stop, tp)
 
     logger.info("ETF run complete.\n")
 
