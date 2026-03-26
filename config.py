@@ -8,21 +8,12 @@ ALPACA_API_KEY = os.getenv("ALPACA_API_KEY")
 ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY")
 PAPER_TRADING = True  # Switch to False ONLY when ready for real money
 
-# --- ETF Universe (bot picks from these) ---
-ETF_UNIVERSE = [
-    "SPY",   # S&P 500
-    "QQQ",   # Nasdaq 100
-    "VTI",   # Total US Market
-    "IWM",   # Russell 2000 (small-cap)
-    "GLD",   # Gold
-    "TLT",   # Long-term US Bonds
-    "XLE",   # Energy sector
-    "XLF",   # Financials sector
-    "XLK",   # Technology sector
-    "XLV",   # Healthcare sector
-    "SCHD",  # Dividend ETF
-    "VNQ",   # Real Estate
-]
+# --- Screener settings ---
+# The full candidate pools live in screener.py (ETF_CANDIDATES, CRYPTO_CANDIDATES).
+# These settings control how many the screener selects for active trading.
+SCREEN_TOP_N_ETF    = 12          # Trade the top 12 ETFs by momentum (from ~35 candidates)
+SCREEN_TOP_N_CRYPTO = 5           # Trade the top 5 crypto pairs by momentum (from 9 candidates)
+SCREEN_MIN_VOLUME   = 500_000     # Skip ETFs with avg daily volume below this
 
 # --- Technical indicator settings ---
 RSI_PERIOD = 14
@@ -50,17 +41,6 @@ STOP_LOSS_ATR_MULT = 2.0      # Stop-loss = entry - 2 * ATR
 TAKE_PROFIT_ATR_MULT = 4.0    # Take-profit = entry + 4 * ATR (2:1 reward/risk)
 MIN_BUY_SCORE = 3             # Minimum score to trigger a BUY (raised from 2)
 MIN_SELL_SCORE = -3           # Maximum score to trigger a SELL (tightened from -2)
-
-# --- Crypto Universe (trades 24/7) ---
-CRYPTO_UNIVERSE = [
-    "BTC/USD",   # Bitcoin
-    "ETH/USD",   # Ethereum
-    "SOL/USD",   # Solana
-    "AVAX/USD",  # Avalanche
-    "LINK/USD",  # Chainlink
-    "DOT/USD",   # Polkadot
-    "AAVE/USD",  # Aave
-]
 
 # --- Crypto risk settings (separate from ETF — crypto is more volatile) ---
 MAX_CRYPTO_POSITIONS = 3       # Max concurrent crypto positions (reduced from 5)

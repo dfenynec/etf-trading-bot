@@ -16,9 +16,10 @@ from datetime import datetime
 import schedule
 
 from config import (
-    ETF_UNIVERSE, RUN_INTERVAL_MINUTES,
+    RUN_INTERVAL_MINUTES, SCREEN_TOP_N_ETF,
     MAX_POSITIONS, MAX_SHORT_POSITIONS, DAILY_LOSS_LIMIT_PCT,
 )
+from screener import screen_etfs
 from data_fetcher import fetch_all_etfs
 from indicators import calculate_indicators
 from risk_manager import calculate_position_size, calculate_stop_loss, calculate_take_profit
@@ -91,9 +92,11 @@ def run_etf_strategy() -> None:
         f"Portfolio: ${portfolio_value:,.2f} | Buying power: ${buying_power:,.2f} | "
         f"Longs: {len(long_positions)} | Shorts: {len(short_positions)}"
     )
-    logger.info(f"Analyzing {len(ETF_UNIVERSE)} ETFs...")
+    # Dynamic screener — ranks ~35 candidates by momentum, returns top 12
+    universe = screen_etfs()
+    logger.info(f"Active ETF universe ({len(universe)}): {universe}")
 
-    all_data = fetch_all_etfs(ETF_UNIVERSE)
+    all_data = fetch_all_etfs(universe)
     signals = []
     for ticker, df in all_data.items():
         df_ind = calculate_indicators(df)
@@ -189,8 +192,10 @@ def run_etf_strategy() -> None:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    from screener import ETF_CANDIDATES, CRYPTO_CANDIDATES
     logger.info("Trading bot starting up...")
-    logger.info(f"ETF universe ({len(ETF_UNIVERSE)}): {ETF_UNIVERSE}")
+    logger.info(f"ETF candidates: {len(ETF_CANDIDATES)} → screened to top {SCREEN_TOP_N_ETF} by momentum each run")
+    logger.info(f"Crypto candidates: {len(CRYPTO_CANDIDATES)} → screened to top {SCREEN_TOP_N_CRYPTO} by momentum")
     logger.info(f"ETF interval: every {RUN_INTERVAL_MINUTES} min (market hours only)")
     logger.info("Crypto: real-time WebSocket stream (1-min bars, 24/7)")
     logger.info("Type CTRL+C to stop.\n")

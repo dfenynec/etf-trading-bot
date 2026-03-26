@@ -28,10 +28,11 @@ from alpaca.data.live import CryptoDataStream
 
 from config import (
     ALPACA_API_KEY, ALPACA_SECRET_KEY,
-    CRYPTO_UNIVERSE, MAX_CRYPTO_POSITIONS, MAX_CRYPTO_POSITION_PCT,
+    MAX_CRYPTO_POSITIONS, MAX_CRYPTO_POSITION_PCT,
     DAILY_LOSS_LIMIT_PCT, BREAKEVEN_ATR_TRIGGER,
     BTC_CORRELATION_FILTER, POSITION_CACHE_TTL,
 )
+from screener import CRYPTO_CANDIDATES, screen_crypto
 from data_fetcher import fetch_all_crypto
 from indicators import calculate_indicators
 from strategy import score_etf
@@ -45,8 +46,8 @@ FULL_REFRESH_INTERVAL = 1800   # Refresh yfinance daily data every 30 min
 TRADE_COOLDOWN        = 300    # Min seconds between trades on same symbol
 PNL_CHECK_INTERVAL    = 300    # Re-check daily P&L every 5 min
 
-_VALID_SYMBOLS     = set(CRYPTO_UNIVERSE)
-_ALPACA_CRYPTO_SYMS = {s.replace("/", "") for s in _VALID_SYMBOLS}
+_ALL_CANDIDATE_SYMS  = set(CRYPTO_CANDIDATES)
+_ALPACA_CRYPTO_SYMS  = {s.replace("/", "") for s in _ALL_CANDIDATE_SYMS}
 
 
 class LiveCryptoTrader:
@@ -58,8 +59,9 @@ class LiveCryptoTrader:
         self._lock       = threading.Lock()
 
         # Data refresh
-        self._last_refresh = 0.0
-        self._refreshing   = False
+        self._last_refresh   = 0.0
+        self._refreshing     = False
+        self._active_symbols: set = set()   # Top N by momentum (updated each refresh)
 
         # Trade timing
         self._last_traded: dict = {}    # alpaca_sym → last trade timestamp
@@ -84,12 +86,15 @@ class LiveCryptoTrader:
             return
         self._refreshing = True
         try:
-            logger.info("[LIVE] Refreshing base data from yfinance...")
-            fresh = fetch_all_crypto(CRYPTO_UNIVERSE)
+            logger.info(f"[LIVE] Refreshing base data for {len(CRYPTO_CANDIDATES)} candidates...")
+            fresh = fetch_all_crypto(CRYPTO_CANDIDATES)
             with self._lock:
                 self._base_data = fresh
+            # Re-rank and update the active trading set
+            ranked = screen_crypto(fresh)
+            self._active_symbols = set(ranked)
             self._last_refresh = time.time()
-            logger.info(f"[LIVE] Base data ready: {list(fresh.keys())}")
+            logger.info(f"[LIVE] Base data ready. Active symbols: {ranked}")
         except Exception as e:
             logger.error(f"[LIVE] Base data refresh failed: {e}")
         finally:
@@ -198,7 +203,8 @@ class LiveCryptoTrader:
 
     async def on_bar(self, bar):
         symbol = bar.symbol
-        if symbol not in _VALID_SYMBOLS:
+        # Only process top-ranked symbols (screener updates every 30 min)
+        if symbol not in self._active_symbols:
             return
 
         # Background refresh if daily data is stale
@@ -294,10 +300,11 @@ class LiveCryptoTrader:
     def run(self) -> None:
         self._refresh_base_data()
 
-        for sym in CRYPTO_UNIVERSE:
+        # Subscribe to ALL candidates — on_bar filters to _active_symbols only
+        for sym in CRYPTO_CANDIDATES:
             self.stream.subscribe_bars(self.on_bar, sym)
 
-        logger.info(f"[LIVE] Streaming 1-min bars for: {CRYPTO_UNIVERSE}")
+        logger.info(f"[LIVE] Streaming 1-min bars for {len(CRYPTO_CANDIDATES)} candidates")
         logger.info(
             f"[LIVE] Cooldown: {TRADE_COOLDOWN}s | "
             f"Daily loss limit: {DAILY_LOSS_LIMIT_PCT*100:.0f}% | "
