@@ -50,6 +50,23 @@ TAKE_PROFIT_ATR_MULT = 3.0    # Take-profit = entry + 3 * ATR
 MIN_BUY_SCORE = 3             # Minimum score to trigger a BUY
 MIN_SELL_SCORE = -3           # Maximum score to trigger a SELL
 
+# --- Crypto Universe (trades 24/7) ---
+CRYPTO_UNIVERSE = [
+    "BTC/USD",   # Bitcoin
+    "ETH/USD",   # Ethereum
+    "SOL/USD",   # Solana
+    "AVAX/USD",  # Avalanche
+    "LINK/USD",  # Chainlink
+    "DOT/USD",   # Polkadot
+    "AAVE/USD",  # Aave
+    "UNI/USD",   # Uniswap
+]
+
+# --- Crypto risk settings (separate from ETF — crypto is more volatile) ---
+MAX_CRYPTO_POSITIONS = 3       # Fewer positions, higher volatility
+MAX_CRYPTO_POSITION_PCT = 0.10 # Max 10% of portfolio per crypto position
+CRYPTO_RUN_INTERVAL_MINUTES = 30  # Check crypto every 30 minutes
+
 # --- Bot settings ---
 LOOKBACK_DAYS = 300           # Days of history to fetch for indicators
-RUN_INTERVAL_MINUTES = 60     # How often the strategy runs (during market hours)
+RUN_INTERVAL_MINUTES = 60     # How often the ETF strategy runs (during market hours)

@@ -43,3 +43,24 @@ def fetch_all_etfs(tickers: list) -> dict:
         if not df.empty:
             data[ticker] = df
     return data
+
+
+def alpaca_to_yfinance(symbol: str) -> str:
+    """Convert Alpaca crypto symbol (BTC/USD) to yfinance format (BTC-USD)."""
+    return symbol.replace("/", "-")
+
+
+def fetch_crypto_data(symbol: str, days: int = LOOKBACK_DAYS) -> pd.DataFrame:
+    """Fetch historical OHLCV data for a crypto pair via Yahoo Finance."""
+    yf_symbol = alpaca_to_yfinance(symbol)
+    return fetch_etf_data(yf_symbol, days=days)
+
+
+def fetch_all_crypto(symbols: list) -> dict:
+    """Fetch data for all crypto symbols. Returns {alpaca_symbol: DataFrame}."""
+    data = {}
+    for symbol in symbols:
+        df = fetch_crypto_data(symbol)
+        if not df.empty:
+            data[symbol] = df
+    return data

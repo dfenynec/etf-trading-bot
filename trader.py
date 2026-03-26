@@ -89,6 +89,32 @@ class AlpacaTrader:
             logger.error(f"SELL failed for {ticker}: {e}")
             return False
 
+    def buy_crypto(self, symbol: str, qty: float) -> bool:
+        """Place a fractional market buy order for crypto. Uses GTC (crypto trades 24/7)."""
+        try:
+            order = MarketOrderRequest(
+                symbol=symbol,
+                qty=round(qty, 6),
+                side=OrderSide.BUY,
+                time_in_force=TimeInForce.GTC,
+            )
+            result = self.client.submit_order(order)
+            logger.info(f"CRYPTO BUY submitted: {qty:.6f}x {symbol} | Order ID: {result.id}")
+            return True
+        except Exception as e:
+            logger.error(f"CRYPTO BUY failed for {symbol}: {e}")
+            return False
+
+    def sell_crypto(self, symbol: str) -> bool:
+        """Close entire crypto position."""
+        try:
+            self.client.close_position(symbol)
+            logger.info(f"CRYPTO SELL: Closed full position in {symbol}")
+            return True
+        except Exception as e:
+            logger.error(f"CRYPTO SELL failed for {symbol}: {e}")
+            return False
+
     def close_all_positions(self) -> None:
         """Emergency: close everything."""
         logger.warning("Closing ALL positions!")
