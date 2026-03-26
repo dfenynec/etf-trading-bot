@@ -121,8 +121,13 @@ class LiveCryptoTrader:
         atr = signal["atr"]
 
         positions = self.trader.get_positions()
-        crypto_positions = {k: v for k, v in positions.items() if "/" in k}
-        holding = symbol in crypto_positions
+        # Alpaca trading API stores crypto positions without the slash
+        # ("SOLUSD"), but the WebSocket stream uses "SOL/USD". Normalize
+        # to no-slash so the lookup always matches.
+        alpaca_sym = symbol.replace("/", "")
+        crypto_positions = {k: v for k, v in positions.items()
+                            if k == alpaca_sym or k == symbol}
+        holding = alpaca_sym in positions
 
         logger.info(
             f"[LIVE] {symbol:<10} ${price:>10.4f}  "
@@ -131,29 +136,29 @@ class LiveCryptoTrader:
         )
 
         # --- Stop-loss / take-profit enforcement (checked before any signal logic) ---
-        if holding and symbol in self._sl_tp:
-            levels = self._sl_tp[symbol]
+        if holding and alpaca_sym in self._sl_tp:
+            levels = self._sl_tp[alpaca_sym]
             if price <= levels["stop_loss"]:
                 logger.warning(
                     f"[LIVE] *** STOP-LOSS HIT {symbol} @ ${price:.4f} "
                     f"(stop: ${levels['stop_loss']:.4f}) ***"
                 )
-                if self.trader.sell_crypto(symbol):
-                    self._last_traded[symbol] = time.time()
-                    del self._sl_tp[symbol]
+                if self.trader.sell_crypto(alpaca_sym):
+                    self._last_traded[alpaca_sym] = time.time()
+                    del self._sl_tp[alpaca_sym]
                 return
             elif price >= levels["take_profit"]:
                 logger.info(
                     f"[LIVE] *** TAKE-PROFIT HIT {symbol} @ ${price:.4f} "
                     f"(target: ${levels['take_profit']:.4f}) ***"
                 )
-                if self.trader.sell_crypto(symbol):
-                    self._last_traded[symbol] = time.time()
-                    del self._sl_tp[symbol]
+                if self.trader.sell_crypto(alpaca_sym):
+                    self._last_traded[alpaca_sym] = time.time()
+                    del self._sl_tp[alpaca_sym]
                 return
 
         # Enforce cooldown to prevent overtrading on the same symbol
-        since_last_trade = time.time() - self._last_traded.get(symbol, 0)
+        since_last_trade = time.time() - self._last_traded.get(alpaca_sym, 0)
         if since_last_trade < TRADE_COOLDOWN:
             return
 
@@ -181,16 +186,16 @@ class LiveCryptoTrader:
                 f"| Stop: ${stop} | Target: ${tp} | Score: {signal['score']} ***"
             )
             if self.trader.buy_crypto(symbol, qty):
-                self._sl_tp[symbol] = {"stop_loss": stop, "take_profit": tp}
-                self._last_traded[symbol] = time.time()
+                self._sl_tp[alpaca_sym] = {"stop_loss": stop, "take_profit": tp}
+                self._last_traded[alpaca_sym] = time.time()
 
         elif signal["signal"] == "SELL" and holding:
             logger.info(
                 f"[LIVE] *** SELL {symbol} @ ${price:.4f} | Score: {signal['score']} ***"
             )
-            if self.trader.sell_crypto(symbol):
-                self._sl_tp.pop(symbol, None)
-                self._last_traded[symbol] = time.time()
+            if self.trader.sell_crypto(alpaca_sym):
+                self._sl_tp.pop(alpaca_sym, None)
+                self._last_traded[alpaca_sym] = time.time()
 
     # ------------------------------------------------------------------
     # Entry point
