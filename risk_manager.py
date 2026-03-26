@@ -5,10 +5,11 @@ from config import MAX_POSITIONS, MAX_POSITION_PCT, STOP_LOSS_ATR_MULT, TAKE_PRO
 logger = logging.getLogger(__name__)
 
 # Minimum allocation per trade (% of portfolio)
-_BASE_PCT = 0.10
+_BASE_PCT = 0.05   # 5% for weakest qualifying signal
 
 # How much extra allocation per score point above the minimum threshold
-_SCORE_STEP = 0.02
+# Score 2 → 5%, score 3 → 6.7%, score 5 → 10% (MAX_POSITION_PCT cap)
+_SCORE_STEP = 0.017
 
 
 def calculate_position_size(
