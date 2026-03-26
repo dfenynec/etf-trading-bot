@@ -70,15 +70,15 @@ def run_etf_strategy() -> None:
         logger.info("Market is closed. Skipping ETF run.")
         return
 
-    portfolio_value = trader.get_portfolio_value()
-    cash = trader.get_cash()
+    portfolio_value  = trader.get_portfolio_value()
+    buying_power     = trader.get_buying_power()
 
     # Separate long and short ETF positions
     long_positions  = {k: v for k, v in trader.get_long_positions().items()  if "/" not in k}
     short_positions = {k: v for k, v in trader.get_short_positions().items() if "/" not in k}
 
     logger.info(
-        f"Portfolio: ${portfolio_value:,.2f} | Cash: ${cash:,.2f} | "
+        f"Portfolio: ${portfolio_value:,.2f} | Buying power: ${buying_power:,.2f} | "
         f"Longs: {len(long_positions)} | Shorts: {len(short_positions)}"
     )
     logger.info(f"Analyzing {len(ETF_UNIVERSE)} ETFs...")
@@ -110,10 +110,10 @@ def run_etf_strategy() -> None:
         else:
             logger.info(f"  → Hold short {ticker} (score {sig['score'] if sig else 'N/A'})")
 
-    # Refresh positions after exits
+    # Refresh positions and buying power after exits
     long_positions  = {k: v for k, v in trader.get_long_positions().items()  if "/" not in k}
     short_positions = {k: v for k, v in trader.get_short_positions().items() if "/" not in k}
-    cash = trader.get_cash()
+    buying_power    = trader.get_buying_power()
 
     # --- Open new LONG positions ---
     for candidate in rank_buy_candidates(signals):
@@ -129,8 +129,8 @@ def run_etf_strategy() -> None:
         qty   = calculate_position_size(portfolio_value, price, score=score, atr=atr)
         cost  = qty * price
 
-        if cost > cash:
-            logger.info(f"  Skip long {ticker}: insufficient cash (need ${cost:.2f})")
+        if cost > buying_power:
+            logger.info(f"  Skip long {ticker}: insufficient buying power (need ${cost:.2f}, have ${buying_power:.2f})")
             continue
 
         stop = calculate_stop_loss(price, atr)
@@ -139,7 +139,7 @@ def run_etf_strategy() -> None:
 
         if trader.buy(ticker, qty):
             long_positions[ticker] = None
-            cash -= cost
+            buying_power -= cost
 
     # --- Open new SHORT positions ---
     for candidate in rank_sell_candidates(signals):
@@ -155,8 +155,8 @@ def run_etf_strategy() -> None:
         qty   = calculate_position_size(portfolio_value, price, score=score, atr=atr)
         cost  = qty * price
 
-        if cost > cash:
-            logger.info(f"  Skip short {ticker}: insufficient cash (need ${cost:.2f})")
+        if cost > buying_power:
+            logger.info(f"  Skip short {ticker}: insufficient buying power (need ${cost:.2f}, have ${buying_power:.2f})")
             continue
 
         stop = calculate_take_profit(price, atr)  # Stop is ABOVE entry for shorts
@@ -165,7 +165,7 @@ def run_etf_strategy() -> None:
 
         if trader.short(ticker, qty):
             short_positions[ticker] = None
-            cash -= cost
+            buying_power -= cost
 
     logger.info("ETF run complete.\n")
 

@@ -161,12 +161,12 @@ class LiveCryptoTrader:
                 logger.info(f"[LIVE] Skip {symbol}: at max positions ({MAX_CRYPTO_POSITIONS})")
                 return
 
-            portfolio_value = self.trader.get_portfolio_value()
-            cash = self.trader.get_cash()
-            max_dollars = portfolio_value * MAX_CRYPTO_POSITION_PCT
-            qty = round(max_dollars / price, 6)
+            portfolio_value  = self.trader.get_portfolio_value()
+            crypto_bp        = self.trader.get_crypto_buying_power()
+            max_dollars      = min(portfolio_value * MAX_CRYPTO_POSITION_PCT, crypto_bp)
+            qty              = round(max_dollars / price, 6)
 
-            if qty * price > cash:
+            if qty * price > crypto_bp:
                 logger.info(f"[LIVE] Skip {symbol}: not enough cash")
                 return
 
