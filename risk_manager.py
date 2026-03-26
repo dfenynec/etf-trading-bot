@@ -22,12 +22,10 @@ def calculate_position_size(
     Dynamic position sizing based on signal strength and volatility.
 
     Allocation scales with score:
-      MIN_BUY_SCORE (2) → 10%  (base)
-      score 3           → 12%
-      score 4           → 14%
-      score 5           → 16%
-      score 6           → 18%
-      score 7+          → 20%  (MAX_POSITION_PCT cap)
+      MIN_BUY_SCORE (2) → 5%   (base)
+      score 3           → 6.7%
+      score 4           → 8.4%
+      score 5           → 10%  (MAX_POSITION_PCT cap)
 
     Volatility adjustment:
       If ATR/price > 3%, scale the allocation down proportionally.
@@ -63,26 +61,3 @@ def calculate_take_profit(entry_price: float, atr: float) -> float:
     return round(entry_price + (TAKE_PROFIT_ATR_MULT * atr), 2)
 
 
-def can_open_position(current_count: int, ticker: str, held_tickers: list) -> tuple[bool, str]:
-    """
-    Returns (True, 'OK') if a new position can be opened,
-    or (False, reason) if it cannot.
-    """
-    if ticker in held_tickers:
-        return False, f"Already holding {ticker}"
-    if current_count >= MAX_POSITIONS:
-        return False, f"Max {MAX_POSITIONS} positions already open"
-    return True, "OK"
-
-
-def check_exit_conditions(position, current_price: float, stop_loss: float, take_profit: float) -> str:
-    """
-    Returns 'SELL' if stop-loss or take-profit is triggered, else 'HOLD'.
-    Note: stop_loss and take_profit must be stored externally (e.g., in a file or DB).
-    This function is called optionally for manual SL/TP enforcement.
-    """
-    if current_price <= stop_loss:
-        return "SELL"
-    if current_price >= take_profit:
-        return "SELL"
-    return "HOLD"

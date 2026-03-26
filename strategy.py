@@ -69,14 +69,12 @@ def score_etf(df: pd.DataFrame, ticker: str) -> dict:
         reasons.append("MACD below signal")
 
     # ------------------------------------------------------------------
-    # 3. SMA 50/200 trend
+    # 3. SMA 50/200 — informational only, not scored
+    # (MACD and EMA 9/21 already capture moving average relationships;
+    #  scoring SMA 50/200 too would triple-count the same signal)
     # ------------------------------------------------------------------
-    if latest["sma_short"] > latest["sma_long"]:
-        score += 1
-        reasons.append("Golden Cross (SMA50 > SMA200)")
-    else:
-        score -= 1
-        reasons.append("Death Cross (SMA50 < SMA200)")
+    sma_trend = "above" if latest["sma_short"] > latest["sma_long"] else "below"
+    reasons.append(f"SMA50 {sma_trend} SMA200 (reference only)")
 
     # ------------------------------------------------------------------
     # 4. Bollinger Bands
