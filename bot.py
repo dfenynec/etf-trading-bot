@@ -137,7 +137,7 @@ def run_etf_strategy() -> None:
         tp   = calculate_take_profit(price, atr)
         logger.info(f"  → BUY  {qty}x {ticker} @ ~${price:.4f} | Stop: ${stop} | Target: ${tp} | Score: {score}")
 
-        if trader.buy(ticker, qty):
+        if trader.buy(ticker, qty, stop_loss=stop, take_profit=tp):
             long_positions[ticker] = None
             buying_power -= cost
 
@@ -163,7 +163,7 @@ def run_etf_strategy() -> None:
         tp   = calculate_stop_loss(price, atr)     # Target is BELOW entry for shorts
         logger.info(f"  → SHORT {qty}x {ticker} @ ~${price:.4f} | Stop: ${stop} | Target: ${tp} | Score: {score}")
 
-        if trader.short(ticker, qty):
+        if trader.short(ticker, qty, stop_loss=stop, take_profit=tp):
             short_positions[ticker] = None
             buying_power -= cost
 

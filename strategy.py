@@ -6,7 +6,7 @@ from config import RSI_OVERSOLD, RSI_OVERBOUGHT, MIN_BUY_SCORE, MIN_SELL_SCORE
 logger = logging.getLogger(__name__)
 
 # ADX threshold — below this the market is ranging/choppy, signals are unreliable
-ADX_TREND_THRESHOLD = 15
+ADX_TREND_THRESHOLD = 20
 
 
 def score_etf(df: pd.DataFrame, ticker: str) -> dict:

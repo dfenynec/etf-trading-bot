@@ -43,13 +43,13 @@ ATR_PERIOD = 14
 STOCH_PERIOD = 14
 
 # --- Risk management ---
-MAX_POSITIONS = 7             # Max open long positions at once
-MAX_SHORT_POSITIONS = 5       # Max open short positions at once
+MAX_POSITIONS = 5             # Max open long positions at once
+MAX_SHORT_POSITIONS = 3       # Max open short positions at once
 MAX_POSITION_PCT = 0.10       # Max 10% of portfolio per position (10% rule)
 STOP_LOSS_ATR_MULT = 2.0      # Stop-loss = entry - 2 * ATR
-TAKE_PROFIT_ATR_MULT = 3.0    # Take-profit = entry + 3 * ATR
-MIN_BUY_SCORE = 2             # Minimum score to trigger a BUY
-MIN_SELL_SCORE = -2           # Maximum score to trigger a SELL
+TAKE_PROFIT_ATR_MULT = 4.0    # Take-profit = entry + 4 * ATR (2:1 reward/risk)
+MIN_BUY_SCORE = 3             # Minimum score to trigger a BUY (raised from 2)
+MIN_SELL_SCORE = -3           # Maximum score to trigger a SELL (tightened from -2)
 
 # --- Crypto Universe (trades 24/7) ---
 CRYPTO_UNIVERSE = [
@@ -63,7 +63,7 @@ CRYPTO_UNIVERSE = [
 ]
 
 # --- Crypto risk settings (separate from ETF — crypto is more volatile) ---
-MAX_CRYPTO_POSITIONS = 5       # Max concurrent crypto positions
+MAX_CRYPTO_POSITIONS = 3       # Max concurrent crypto positions (reduced from 5)
 MAX_CRYPTO_POSITION_PCT = 0.08 # Max 8% per crypto position (lower — crypto is more volatile)
 CRYPTO_RUN_INTERVAL_MINUTES = 30  # Check crypto every 30 minutes
 

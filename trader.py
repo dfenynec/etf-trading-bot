@@ -1,8 +1,12 @@
 import logging
 
 from alpaca.trading.client import TradingClient
-from alpaca.trading.requests import MarketOrderRequest
-from alpaca.trading.enums import OrderSide, TimeInForce, PositionSide
+from alpaca.trading.requests import (
+    MarketOrderRequest,
+    StopLossRequest,
+    TakeProfitRequest,
+)
+from alpaca.trading.enums import OrderClass, OrderSide, TimeInForce, PositionSide
 
 from config import ALPACA_API_KEY, ALPACA_SECRET_KEY, PAPER_TRADING
 
@@ -70,17 +74,23 @@ class AlpacaTrader:
 
     # --- Orders ---
 
-    def buy(self, ticker: str, qty: int) -> bool:
-        """Place a market buy order."""
+    def buy(self, ticker: str, qty: int,
+            stop_loss: float = None, take_profit: float = None) -> bool:
+        """Place a bracket buy order with stop-loss and take-profit enforced by Alpaca."""
         try:
-            order = MarketOrderRequest(
+            kwargs = dict(
                 symbol=ticker,
                 qty=qty,
                 side=OrderSide.BUY,
                 time_in_force=TimeInForce.DAY,
             )
-            result = self.client.submit_order(order)
-            logger.info(f"BUY submitted: {qty}x {ticker} | Order ID: {result.id}")
+            if stop_loss and take_profit:
+                kwargs["order_class"]  = OrderClass.BRACKET
+                kwargs["stop_loss"]    = StopLossRequest(stop_price=round(stop_loss, 2))
+                kwargs["take_profit"]  = TakeProfitRequest(limit_price=round(take_profit, 2))
+
+            result = self.client.submit_order(MarketOrderRequest(**kwargs))
+            logger.info(f"BUY submitted: {qty}x {ticker} | SL=${stop_loss} TP=${take_profit} | ID: {result.id}")
             return True
         except Exception as e:
             logger.error(f"BUY failed for {ticker}: {e}")
@@ -109,17 +119,23 @@ class AlpacaTrader:
             logger.error(f"SELL failed for {ticker}: {e}")
             return False
 
-    def short(self, ticker: str, qty: int) -> bool:
-        """Open a short position — sell shares we don't own."""
+    def short(self, ticker: str, qty: int,
+              stop_loss: float = None, take_profit: float = None) -> bool:
+        """Open a short bracket order — stop is ABOVE entry, target is BELOW entry."""
         try:
-            order = MarketOrderRequest(
+            kwargs = dict(
                 symbol=ticker,
                 qty=qty,
                 side=OrderSide.SELL,
                 time_in_force=TimeInForce.DAY,
             )
-            result = self.client.submit_order(order)
-            logger.info(f"SHORT submitted: {qty}x {ticker} | Order ID: {result.id}")
+            if stop_loss and take_profit:
+                kwargs["order_class"]  = OrderClass.BRACKET
+                kwargs["stop_loss"]    = StopLossRequest(stop_price=round(stop_loss, 2))
+                kwargs["take_profit"]  = TakeProfitRequest(limit_price=round(take_profit, 2))
+
+            result = self.client.submit_order(MarketOrderRequest(**kwargs))
+            logger.info(f"SHORT submitted: {qty}x {ticker} | SL=${stop_loss} TP=${take_profit} | ID: {result.id}")
             return True
         except Exception as e:
             logger.error(f"SHORT failed for {ticker}: {e}")
@@ -135,17 +151,23 @@ class AlpacaTrader:
             logger.error(f"COVER failed for {ticker}: {e}")
             return False
 
-    def buy_crypto(self, symbol: str, qty: float) -> bool:
-        """Place a fractional market buy order for crypto. Uses GTC (crypto trades 24/7)."""
+    def buy_crypto(self, symbol: str, qty: float,
+                   stop_loss: float = None, take_profit: float = None) -> bool:
+        """Place a fractional bracket buy order for crypto (GTC, 24/7)."""
         try:
-            order = MarketOrderRequest(
+            kwargs = dict(
                 symbol=symbol,
                 qty=round(qty, 6),
                 side=OrderSide.BUY,
                 time_in_force=TimeInForce.GTC,
             )
-            result = self.client.submit_order(order)
-            logger.info(f"CRYPTO BUY submitted: {qty:.6f}x {symbol} | Order ID: {result.id}")
+            if stop_loss and take_profit:
+                kwargs["order_class"]  = OrderClass.BRACKET
+                kwargs["stop_loss"]    = StopLossRequest(stop_price=round(stop_loss, 4))
+                kwargs["take_profit"]  = TakeProfitRequest(limit_price=round(take_profit, 4))
+
+            result = self.client.submit_order(MarketOrderRequest(**kwargs))
+            logger.info(f"CRYPTO BUY submitted: {qty:.6f}x {symbol} | SL=${stop_loss} TP=${take_profit} | ID: {result.id}")
             return True
         except Exception as e:
             logger.error(f"CRYPTO BUY failed for {symbol}: {e}")

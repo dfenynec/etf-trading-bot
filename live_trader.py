@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 FULL_REFRESH_INTERVAL = 1800  # 30 minutes
 
 # Minimum seconds between trades on the same symbol (avoids thrashing)
-TRADE_COOLDOWN = 120  # 2 minutes (was 5)
+TRADE_COOLDOWN = 300  # 5 minutes
 
 # Valid symbols set for fast lookup in the bar handler
 _VALID_SYMBOLS = set(CRYPTO_UNIVERSE)
@@ -52,8 +52,9 @@ class LiveCryptoTrader:
         self._lock = threading.Lock()
         self._last_refresh = 0.0
         self._refreshing = False            # Prevent concurrent refreshes
-        self._last_traded: dict = {}        # symbol → timestamp of last trade
-        self._sl_tp: dict = {}             # symbol → {stop_loss, take_profit}
+        self._last_traded: dict = {}        # alpaca_sym → timestamp of last trade
+        # SL/TP are now bracket orders enforced by Alpaca at exchange level —
+        # no manual price tracking needed here.
 
     # ------------------------------------------------------------------
     # Data management
@@ -138,27 +139,8 @@ class LiveCryptoTrader:
             f"holding: {holding}"
         )
 
-        # --- Stop-loss / take-profit enforcement (checked before any signal logic) ---
-        if holding and alpaca_sym in self._sl_tp:
-            levels = self._sl_tp[alpaca_sym]
-            if price <= levels["stop_loss"]:
-                logger.warning(
-                    f"[LIVE] *** STOP-LOSS HIT {symbol} @ ${price:.4f} "
-                    f"(stop: ${levels['stop_loss']:.4f}) ***"
-                )
-                if self.trader.sell_crypto(alpaca_sym):
-                    self._last_traded[alpaca_sym] = time.time()
-                    del self._sl_tp[alpaca_sym]
-                return
-            elif price >= levels["take_profit"]:
-                logger.info(
-                    f"[LIVE] *** TAKE-PROFIT HIT {symbol} @ ${price:.4f} "
-                    f"(target: ${levels['take_profit']:.4f}) ***"
-                )
-                if self.trader.sell_crypto(alpaca_sym):
-                    self._last_traded[alpaca_sym] = time.time()
-                    del self._sl_tp[alpaca_sym]
-                return
+        # SL/TP are bracket orders placed at Alpaca — no manual checks needed.
+        # Only enforce cooldown to prevent signal-flip overtrading.
 
         # Enforce cooldown to prevent overtrading on the same symbol
         since_last_trade = time.time() - self._last_traded.get(alpaca_sym, 0)
@@ -188,8 +170,7 @@ class LiveCryptoTrader:
                 f"[LIVE] *** BUY  {symbol} | {qty:.6f} units @ ${price:.4f} "
                 f"| Stop: ${stop} | Target: ${tp} | Score: {signal['score']} ***"
             )
-            if self.trader.buy_crypto(symbol, qty):
-                self._sl_tp[alpaca_sym] = {"stop_loss": stop, "take_profit": tp}
+            if self.trader.buy_crypto(symbol, qty, stop_loss=stop, take_profit=tp):
                 self._last_traded[alpaca_sym] = time.time()
 
         elif signal["signal"] == "SELL" and holding:
@@ -197,7 +178,6 @@ class LiveCryptoTrader:
                 f"[LIVE] *** SELL {symbol} @ ${price:.4f} | Score: {signal['score']} ***"
             )
             if self.trader.sell_crypto(alpaca_sym):
-                self._sl_tp.pop(alpaca_sym, None)
                 self._last_traded[alpaca_sym] = time.time()
 
     # ------------------------------------------------------------------
