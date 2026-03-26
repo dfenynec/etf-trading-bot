@@ -34,8 +34,8 @@ FULL_REFRESH_INTERVAL = 1800  # 30 minutes
 # Minimum seconds between trades on the same symbol (avoids thrashing)
 TRADE_COOLDOWN = 300  # 5 minutes
 
-# Map Alpaca WebSocket format (BTCUSD) → internal format (BTC/USD)
-_WS_TO_SYMBOL = {s.replace("/", ""): s for s in CRYPTO_UNIVERSE}
+# Valid symbols set for fast lookup in the bar handler
+_VALID_SYMBOLS = set(CRYPTO_UNIVERSE)
 
 
 class LiveCryptoTrader:
@@ -100,8 +100,8 @@ class LiveCryptoTrader:
     # ------------------------------------------------------------------
 
     async def on_bar(self, bar):
-        symbol = _WS_TO_SYMBOL.get(bar.symbol)
-        if not symbol:
+        symbol = bar.symbol  # Alpaca crypto stream uses "BTC/USD" format
+        if symbol not in _VALID_SYMBOLS:
             return
 
         # Trigger background refresh if data is stale
@@ -172,9 +172,8 @@ class LiveCryptoTrader:
         # Load base data before subscribing
         self._refresh_base_data()
 
-        ws_symbols = [s.replace("/", "") for s in CRYPTO_UNIVERSE]
-        for ws_sym in ws_symbols:
-            self.stream.subscribe_bars(self.on_bar, ws_sym)
+        for sym in CRYPTO_UNIVERSE:
+            self.stream.subscribe_bars(self.on_bar, sym)
 
         logger.info(f"[LIVE] Streaming 1-min bars for: {CRYPTO_UNIVERSE}")
         logger.info(f"[LIVE] Trade cooldown: {TRADE_COOLDOWN}s | Refresh interval: {FULL_REFRESH_INTERVAL}s")

@@ -59,7 +59,6 @@ CRYPTO_UNIVERSE = [
     "LINK/USD",  # Chainlink
     "DOT/USD",   # Polkadot
     "AAVE/USD",  # Aave
-    "UNI/USD",   # Uniswap
 ]
 
 # --- Crypto risk settings (separate from ETF — crypto is more volatile) ---
