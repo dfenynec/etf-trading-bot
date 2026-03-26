@@ -125,9 +125,12 @@ class LiveCryptoTrader:
         # ("SOLUSD"), but the WebSocket stream uses "SOL/USD". Normalize
         # to no-slash so the lookup always matches.
         alpaca_sym = symbol.replace("/", "")
-        crypto_positions = {k: v for k, v in positions.items()
-                            if k == alpaca_sym or k == symbol}
         holding = alpaca_sym in positions
+
+        # Count ALL open crypto positions for the MAX_CRYPTO_POSITIONS check.
+        # Must use no-slash format since that's how Alpaca stores them.
+        alpaca_crypto_syms = {s.replace("/", "") for s in _VALID_SYMBOLS}
+        crypto_positions = {k: v for k, v in positions.items() if k in alpaca_crypto_syms}
 
         logger.info(
             f"[LIVE] {symbol:<10} ${price:>10.4f}  "

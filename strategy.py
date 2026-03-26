@@ -73,8 +73,12 @@ def score_etf(df: pd.DataFrame, ticker: str) -> dict:
     # (MACD and EMA 9/21 already capture moving average relationships;
     #  scoring SMA 50/200 too would triple-count the same signal)
     # ------------------------------------------------------------------
-    sma_trend = "above" if latest["sma_short"] > latest["sma_long"] else "below"
-    reasons.append(f"SMA50 {sma_trend} SMA200 (reference only)")
+    import math as _math
+    if not _math.isnan(float(latest["sma_long"])):
+        sma_trend = "above" if latest["sma_short"] > latest["sma_long"] else "below"
+        reasons.append(f"SMA50 {sma_trend} SMA200 (reference only)")
+    else:
+        reasons.append("SMA200 unavailable (insufficient history)")
 
     # ------------------------------------------------------------------
     # 4. Bollinger Bands
