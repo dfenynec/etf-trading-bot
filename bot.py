@@ -44,15 +44,17 @@ trader = AlpacaTrader()
 
 def print_signal_table(signals: list, label: str = "") -> None:
     """Pretty-print the scoring table."""
-    logger.info("-" * 70)
-    logger.info(f"{'TICKER':<12} {'SCORE':>6} {'SIGNAL':<8} {'PRICE':>10}  TOP REASON")
-    logger.info("-" * 70)
+    logger.info("-" * 80)
+    logger.info(f"{'TICKER':<12} {'SCORE':>6} {'ADX':>6} {'TREND':>6} {'SIGNAL':<6} {'PRICE':>10}  TOP REASON")
+    logger.info("-" * 80)
     for s in sorted(signals, key=lambda x: x["score"], reverse=True):
         top_reason = s["reasons"][0] if s["reasons"] else ""
+        trend_str = "YES" if s.get("trending") else "NO"
         logger.info(
-            f"{s['ticker']:<12} {s['score']:>6} {s['signal']:<8} ${s['price']:>9.2f}  {top_reason}"
+            f"{s['ticker']:<12} {s['score']:>6} {s.get('adx', 0):>6.1f} {trend_str:>6} "
+            f"{s['signal']:<6} ${s['price']:>9.4f}  {top_reason}"
         )
-    logger.info("-" * 70)
+    logger.info("-" * 80)
 
 
 # ---------------------------------------------------------------------------
