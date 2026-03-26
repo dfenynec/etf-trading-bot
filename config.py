@@ -43,7 +43,8 @@ ATR_PERIOD = 14
 STOCH_PERIOD = 14
 
 # --- Risk management ---
-MAX_POSITIONS = 5             # Max open positions at once
+MAX_POSITIONS = 5             # Max open long positions at once
+MAX_SHORT_POSITIONS = 3       # Max open short positions at once
 MAX_POSITION_PCT = 0.15       # Max 15% of portfolio per position
 STOP_LOSS_ATR_MULT = 2.0      # Stop-loss = entry - 2 * ATR
 TAKE_PROFIT_ATR_MULT = 3.0    # Take-profit = entry + 3 * ATR

@@ -205,6 +205,14 @@ def rank_buy_candidates(signals: list) -> list:
     )
 
 
+def rank_sell_candidates(signals: list) -> list:
+    """Return SELL signals sorted by score ascending (most negative = strongest short first)."""
+    return sorted(
+        [s for s in signals if s["signal"] == "SELL"],
+        key=lambda x: x["score"],
+    )
+
+
 def _empty_signal(ticker: str) -> dict:
     return {
         "ticker": ticker, "score": 0, "signal": "HOLD",

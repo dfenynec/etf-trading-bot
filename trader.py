@@ -2,7 +2,7 @@ import logging
 
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest
-from alpaca.trading.enums import OrderSide, TimeInForce
+from alpaca.trading.enums import OrderSide, TimeInForce, PositionSide
 
 from config import ALPACA_API_KEY, ALPACA_SECRET_KEY, PAPER_TRADING
 
@@ -41,6 +41,16 @@ class AlpacaTrader:
     def get_positions(self) -> dict:
         """Returns {ticker: position_object} for all open positions."""
         return {p.symbol: p for p in self.client.get_all_positions()}
+
+    def get_long_positions(self) -> dict:
+        """Returns only long positions."""
+        return {k: v for k, v in self.get_positions().items()
+                if v.side == PositionSide.LONG}
+
+    def get_short_positions(self) -> dict:
+        """Returns only short positions."""
+        return {k: v for k, v in self.get_positions().items()
+                if v.side == PositionSide.SHORT}
 
     def get_position(self, ticker: str):
         try:
@@ -87,6 +97,32 @@ class AlpacaTrader:
             return True
         except Exception as e:
             logger.error(f"SELL failed for {ticker}: {e}")
+            return False
+
+    def short(self, ticker: str, qty: int) -> bool:
+        """Open a short position — sell shares we don't own."""
+        try:
+            order = MarketOrderRequest(
+                symbol=ticker,
+                qty=qty,
+                side=OrderSide.SELL,
+                time_in_force=TimeInForce.DAY,
+            )
+            result = self.client.submit_order(order)
+            logger.info(f"SHORT submitted: {qty}x {ticker} | Order ID: {result.id}")
+            return True
+        except Exception as e:
+            logger.error(f"SHORT failed for {ticker}: {e}")
+            return False
+
+    def cover(self, ticker: str) -> bool:
+        """Close a short position (buy to cover)."""
+        try:
+            self.client.close_position(ticker)
+            logger.info(f"COVERED short position in {ticker}")
+            return True
+        except Exception as e:
+            logger.error(f"COVER failed for {ticker}: {e}")
             return False
 
     def buy_crypto(self, symbol: str, qty: float) -> bool:

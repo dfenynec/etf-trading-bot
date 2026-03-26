@@ -17,12 +17,12 @@ import schedule
 
 from config import (
     ETF_UNIVERSE, RUN_INTERVAL_MINUTES,
-    MAX_POSITIONS,
+    MAX_POSITIONS, MAX_SHORT_POSITIONS,
 )
 from data_fetcher import fetch_all_etfs
 from indicators import calculate_indicators
-from risk_manager import calculate_position_size, calculate_stop_loss, calculate_take_profit, can_open_position
-from strategy import rank_buy_candidates, score_etf
+from risk_manager import calculate_position_size, calculate_stop_loss, calculate_take_profit
+from strategy import rank_buy_candidates, rank_sell_candidates, score_etf
 from trader import AlpacaTrader
 from live_trader import LiveCryptoTrader
 
@@ -72,11 +72,15 @@ def run_etf_strategy() -> None:
 
     portfolio_value = trader.get_portfolio_value()
     cash = trader.get_cash()
-    positions = trader.get_positions()
-    # Only consider stock positions (not crypto)
-    etf_positions = {k: v for k, v in positions.items() if "/" not in k}
 
-    logger.info(f"Portfolio: ${portfolio_value:,.2f} | Cash: ${cash:,.2f} | ETF Positions: {len(etf_positions)}")
+    # Separate long and short ETF positions
+    long_positions  = {k: v for k, v in trader.get_long_positions().items()  if "/" not in k}
+    short_positions = {k: v for k, v in trader.get_short_positions().items() if "/" not in k}
+
+    logger.info(
+        f"Portfolio: ${portfolio_value:,.2f} | Cash: ${cash:,.2f} | "
+        f"Longs: {len(long_positions)} | Shorts: {len(short_positions)}"
+    )
     logger.info(f"Analyzing {len(ETF_UNIVERSE)} ETFs...")
 
     all_data = fetch_all_etfs(ETF_UNIVERSE)
@@ -88,49 +92,78 @@ def run_etf_strategy() -> None:
 
     print_signal_table(signals, label="ETF")
 
-    # Exit positions with SELL signal
-    for ticker in list(etf_positions.keys()):
+    # --- Manage existing long positions ---
+    for ticker in list(long_positions.keys()):
         sig = next((s for s in signals if s["ticker"] == ticker), None)
         if sig and sig["signal"] == "SELL":
-            logger.info(f"  → SELL {ticker} (score {sig['score']})")
+            logger.info(f"  → SELL LONG {ticker} (score {sig['score']})")
             trader.sell(ticker)
         else:
-            logger.info(f"  → Hold {ticker} (score {sig['score'] if sig else 'N/A'})")
+            logger.info(f"  → Hold long {ticker} (score {sig['score'] if sig else 'N/A'})")
 
-    # Refresh after sells
-    positions = trader.get_positions()
-    etf_positions = {k: v for k, v in positions.items() if "/" not in k}
-    held = list(etf_positions.keys())
-    current_count = len(etf_positions)
+    # --- Manage existing short positions ---
+    for ticker in list(short_positions.keys()):
+        sig = next((s for s in signals if s["ticker"] == ticker), None)
+        if sig and sig["signal"] == "BUY":
+            logger.info(f"  → COVER SHORT {ticker} (score {sig['score']})")
+            trader.cover(ticker)
+        else:
+            logger.info(f"  → Hold short {ticker} (score {sig['score'] if sig else 'N/A'})")
+
+    # Refresh positions after exits
+    long_positions  = {k: v for k, v in trader.get_long_positions().items()  if "/" not in k}
+    short_positions = {k: v for k, v in trader.get_short_positions().items() if "/" not in k}
     cash = trader.get_cash()
 
+    # --- Open new LONG positions ---
     for candidate in rank_buy_candidates(signals):
         ticker = candidate["ticker"]
-        ok, reason = can_open_position(current_count, ticker, held)
-        if not ok:
-            logger.info(f"  Skipping {ticker}: {reason}")
+        if ticker in long_positions:
             continue
+        if len(long_positions) >= MAX_POSITIONS:
+            break
 
         price = candidate["price"]
-        atr = candidate["atr"]
-        qty = calculate_position_size(portfolio_value, price)
-        cost = qty * price
+        atr   = candidate["atr"]
+        qty   = calculate_position_size(portfolio_value, price)
+        cost  = qty * price
 
         if cost > cash:
-            logger.info(f"  Skipping {ticker}: insufficient cash (need ${cost:.2f}, have ${cash:.2f})")
+            logger.info(f"  Skip long {ticker}: insufficient cash (need ${cost:.2f})")
             continue
 
         stop = calculate_stop_loss(price, atr)
-        tp = calculate_take_profit(price, atr)
-        logger.info(f"  → BUY {qty}x {ticker} @ ~${price:.2f} | Stop: ${stop} | Target: ${tp} | Score: {candidate['score']}")
+        tp   = calculate_take_profit(price, atr)
+        logger.info(f"  → BUY  {qty}x {ticker} @ ~${price:.4f} | Stop: ${stop} | Target: ${tp} | Score: {candidate['score']}")
 
         if trader.buy(ticker, qty):
-            current_count += 1
-            held.append(ticker)
+            long_positions[ticker] = None
             cash -= cost
 
-        if current_count >= MAX_POSITIONS:
+    # --- Open new SHORT positions ---
+    for candidate in rank_sell_candidates(signals):
+        ticker = candidate["ticker"]
+        if ticker in short_positions:
+            continue
+        if len(short_positions) >= MAX_SHORT_POSITIONS:
             break
+
+        price = candidate["price"]
+        atr   = candidate["atr"]
+        qty   = calculate_position_size(portfolio_value, price)
+        cost  = qty * price
+
+        if cost > cash:
+            logger.info(f"  Skip short {ticker}: insufficient cash (need ${cost:.2f})")
+            continue
+
+        stop = calculate_take_profit(price, atr)  # Stop is ABOVE entry for shorts
+        tp   = calculate_stop_loss(price, atr)     # Target is BELOW entry for shorts
+        logger.info(f"  → SHORT {qty}x {ticker} @ ~${price:.4f} | Stop: ${stop} | Target: ${tp} | Score: {candidate['score']}")
+
+        if trader.short(ticker, qty):
+            short_positions[ticker] = None
+            cash -= cost
 
     logger.info("ETF run complete.\n")
 
