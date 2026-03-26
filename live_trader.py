@@ -145,11 +145,53 @@ class LiveCryptoTrader:
         if time.time() - self._pos_cache_time > POSITION_CACHE_TTL:
             self._pos_cache      = self.trader.get_positions()
             self._pos_cache_time = time.time()
+            # Detect positions closed by bracket orders since last refresh
+            self._reconcile_closed_positions(self._pos_cache)
         return self._pos_cache
 
     def _invalidate_pos_cache(self) -> None:
         """Force a fresh fetch on the next bar after a trade."""
         self._pos_cache_time = 0.0
+
+    def _reconcile_closed_positions(self, positions: dict) -> None:
+        """
+        Compare _entries (positions we opened) against current live positions.
+        Any symbol in _entries that is no longer in positions was closed by
+        Alpaca (stop-loss or take-profit bracket order hit).
+        Cleans up stale _entries and logs the close to the trade journal.
+        """
+        for alpaca_sym in list(self._entries.keys()):
+            if alpaca_sym in positions:
+                continue  # Still open — nothing to do
+
+            entry = self._entries.pop(alpaca_sym)
+
+            # Resolve slash symbol for data lookup (e.g. "SOLUSD" → "SOL/USD")
+            slash_sym = next(
+                (s for s in _ALL_CANDIDATE_SYMS if s.replace("/", "") == alpaca_sym),
+                alpaca_sym,
+            )
+
+            # Best-effort exit price from cached daily data
+            with self._lock:
+                df = self._base_data.get(slash_sym)
+            exit_price = float(df["close"].iloc[-1]) if df is not None and not df.empty else 0.0
+
+            pnl_pct = (
+                (exit_price - entry["price"]) / entry["price"] * 100
+                if entry["price"] > 0 else 0.0
+            )
+            result = "TP hit" if pnl_pct > 0 else "SL hit"
+
+            logger.info(
+                f"[LIVE] *** CLOSED {slash_sym} via bracket order ({result}) | "
+                f"Entry: ${entry['price']:.4f} → Exit: ~${exit_price:.4f} | "
+                f"PnL: {pnl_pct:+.2f}% ***"
+            )
+            log_trade(
+                "CLOSE", slash_sym, 0, exit_price, 0,
+                note=f"{result} | entry=${entry['price']:.4f} | pnl={pnl_pct:+.2f}%",
+            )
 
     # ------------------------------------------------------------------
     # Daily loss circuit breaker
