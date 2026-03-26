@@ -16,7 +16,7 @@ from datetime import datetime
 import schedule
 
 from config import (
-    RUN_INTERVAL_MINUTES, SCREEN_TOP_N_ETF,
+    RUN_INTERVAL_MINUTES, SCREEN_TOP_N_ETF, SCREEN_TOP_N_CRYPTO,
     MAX_POSITIONS, MAX_SHORT_POSITIONS, DAILY_LOSS_LIMIT_PCT,
 )
 from screener import screen_etfs
