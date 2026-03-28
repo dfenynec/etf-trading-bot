@@ -51,6 +51,16 @@ CRYPTO_RUN_INTERVAL_MINUTES = 30  # Check crypto every 30 minutes
 DAILY_LOSS_LIMIT_PCT  = 0.03  # Halt all new trades if daily P&L drops below -3%
 BREAKEVEN_ATR_TRIGGER = 1.0   # Move stop to entry when profit >= 1x ATR (lock in breakeven)
 
+# --- Regime detection thresholds ---
+ADX_RANGING_THRESHOLD  = 20   # ADX below this = ranging/choppy → mean-reversion mode
+ADX_TRENDING_THRESHOLD = 25   # ADX above this = clearly trending → trend-following mode
+# Zone 20–25 is transitional — treated conservatively as ranging
+
+# --- Mean reversion settings (ranging markets only) ---
+MR_RSI_OVERSOLD  = 30  # Deeper extreme needed to BUY in ranging market
+MR_RSI_OVERBOUGHT = 70  # Deeper extreme needed to SELL in ranging market
+MIN_MR_SCORE     = 3   # Score threshold for mean-reversion trades (max possible ~5)
+
 # --- Correlation filter ---
 BTC_CORRELATION_FILTER = True # Suppress altcoin BUYs when BTC score is negative
 
