@@ -12,7 +12,7 @@ PAPER_TRADING = True  # Switch to False ONLY when ready for real money
 # The full candidate pools live in screener.py (ETF_CANDIDATES, CRYPTO_CANDIDATES).
 # These settings control how many the screener selects for active trading.
 SCREEN_TOP_N_ETF    = 12          # Trade the top 12 ETFs by momentum (from ~35 candidates)
-SCREEN_TOP_N_CRYPTO = 5           # Trade the top 5 crypto pairs by momentum (from 9 candidates)
+SCREEN_TOP_N_CRYPTO = 8           # Watch the top 8 crypto pairs by momentum (from 19 candidates)
 SCREEN_MIN_VOLUME   = 500_000     # Skip ETFs with avg daily volume below this
 
 # --- Technical indicator settings ---
@@ -50,6 +50,16 @@ CRYPTO_RUN_INTERVAL_MINUTES = 30  # Check crypto every 30 minutes
 # --- Risk circuit breakers ---
 DAILY_LOSS_LIMIT_PCT  = 0.03  # Halt all new trades if daily P&L drops below -3%
 BREAKEVEN_ATR_TRIGGER = 1.0   # Move stop to entry when profit >= 1x ATR (lock in breakeven)
+
+# --- Regime detection thresholds ---
+ADX_RANGING_THRESHOLD  = 20   # ADX below this = ranging/choppy → mean-reversion mode
+ADX_TRENDING_THRESHOLD = 25   # ADX above this = clearly trending → trend-following mode
+# Zone 20–25 is transitional — treated conservatively as ranging
+
+# --- Mean reversion settings (ranging markets only) ---
+MR_RSI_OVERSOLD  = 30  # Deeper extreme needed to BUY in ranging market
+MR_RSI_OVERBOUGHT = 70  # Deeper extreme needed to SELL in ranging market
+MIN_MR_SCORE     = 3   # Score threshold for mean-reversion trades (max possible ~5)
 
 # --- Correlation filter ---
 BTC_CORRELATION_FILTER = True # Suppress altcoin BUYs when BTC score is negative
