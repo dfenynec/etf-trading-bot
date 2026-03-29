@@ -37,8 +37,11 @@ STOCH_PERIOD = 14
 MAX_POSITIONS = 5             # Max open long positions at once
 MAX_SHORT_POSITIONS = 3       # Max open short positions at once
 MAX_POSITION_PCT = 0.10       # Max 10% of portfolio per position (10% rule)
-STOP_LOSS_ATR_MULT = 3.0      # Stop-loss = entry - 3 * ATR (wider — survives normal crypto noise)
-TAKE_PROFIT_ATR_MULT = 4.0    # Take-profit = entry + 4 * ATR (keep 4:3 reward/risk)
+STOP_LOSS_ATR_MULT = 2.0      # Stop-loss = entry - 2 * ATR
+TAKE_PROFIT_ATR_MULT = 3.0    # Take-profit = entry + 3 * ATR
+# Percentage caps — prevent ATR from stretching stops/targets too far in volatile markets
+STOP_LOSS_MAX_PCT  = 0.04     # Stop never more than 4% below entry
+TAKE_PROFIT_MAX_PCT = 0.07    # Target never more than 7% above entry (achievable in calm markets)
 RISK_PER_TRADE_PCT = 0.01     # Risk exactly 1% of portfolio per trade (position sized by stop distance)
 MIN_BUY_SCORE = 4             # Minimum score to trigger a BUY (4+ indicators must agree)
 MIN_SELL_SCORE = -4           # Maximum score to trigger a SELL (tightened to match)

@@ -24,6 +24,7 @@ import logging
 from config import (
     MAX_POSITION_PCT, MAX_CRYPTO_POSITION_PCT,
     STOP_LOSS_ATR_MULT, TAKE_PROFIT_ATR_MULT,
+    STOP_LOSS_MAX_PCT, TAKE_PROFIT_MAX_PCT,
     RISK_PER_TRADE_PCT,
 )
 
@@ -113,10 +114,22 @@ def calculate_crypto_position_size(
 
 
 def calculate_stop_loss(entry_price: float, atr: float) -> float:
-    """Stop-loss placed STOP_LOSS_ATR_MULT × ATR below entry."""
-    return round(entry_price - (STOP_LOSS_ATR_MULT * atr), 4)
+    """
+    Stop-loss = entry - (STOP_LOSS_ATR_MULT × ATR),
+    but never more than STOP_LOSS_MAX_PCT below entry.
+    This prevents ATR from creating unreachably wide stops in volatile markets.
+    """
+    atr_stop  = entry_price - (STOP_LOSS_ATR_MULT * atr)
+    pct_floor = entry_price * (1 - STOP_LOSS_MAX_PCT)
+    return round(max(atr_stop, pct_floor), 4)
 
 
 def calculate_take_profit(entry_price: float, atr: float) -> float:
-    """Take-profit placed TAKE_PROFIT_ATR_MULT × ATR above entry."""
-    return round(entry_price + (TAKE_PROFIT_ATR_MULT * atr), 4)
+    """
+    Take-profit = entry + (TAKE_PROFIT_ATR_MULT × ATR),
+    but never more than TAKE_PROFIT_MAX_PCT above entry.
+    This keeps targets realistic even when ATR is unusually large.
+    """
+    atr_tp    = entry_price + (TAKE_PROFIT_ATR_MULT * atr)
+    pct_ceil  = entry_price * (1 + TAKE_PROFIT_MAX_PCT)
+    return round(min(atr_tp, pct_ceil), 4)
