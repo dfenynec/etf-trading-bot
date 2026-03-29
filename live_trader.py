@@ -477,4 +477,26 @@ class LiveCryptoTrader:
             f"Pyramid trigger: +{PYRAMID_TRIGGER_PCT*100:.0f}% | "
             f"BTC filter: {BTC_CORRELATION_FILTER}"
         )
-        self.stream.run()
+
+        # Retry with exponential backoff — Alpaca limits concurrent WebSocket
+        # connections. After a redeploy the old connection may still be alive
+        # for a few seconds, causing "connection limit exceeded".
+        max_retries = 8
+        for attempt in range(max_retries):
+            try:
+                self.stream.run()
+                break  # clean exit — won't normally reach here
+            except ValueError as e:
+                if "connection limit" in str(e).lower() and attempt < max_retries - 1:
+                    wait = min(2 ** attempt * 5, 60)  # 5s, 10s, 20s, 40s, 60s...
+                    logger.warning(
+                        f"[LIVE] WebSocket connection limit — old connection still alive. "
+                        f"Retrying in {wait}s (attempt {attempt+1}/{max_retries})"
+                    )
+                    time.sleep(wait)
+                    # Recreate the stream object to get a fresh connection
+                    self.stream = CryptoDataStream(ALPACA_API_KEY, ALPACA_SECRET_KEY)
+                    for sym in CRYPTO_CANDIDATES:
+                        self.stream.subscribe_bars(self.on_bar, sym)
+                else:
+                    raise

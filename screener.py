@@ -73,7 +73,7 @@ CRYPTO_CANDIDATES = [
     # Infrastructure
     "ATOM/USD",
     # Additional liquid pairs
-    "SHIB/USD", "PEPE/USD", "WIF/USD",
+    "SHIB/USD", "WIF/USD",
 ]
 
 
