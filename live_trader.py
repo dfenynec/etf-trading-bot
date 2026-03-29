@@ -463,7 +463,8 @@ class LiveCryptoTrader:
         logger.info(
             f"[LIVE] Cooldown: {TRADE_COOLDOWN}s | "
             f"Daily loss limit: {DAILY_LOSS_LIMIT_PCT*100:.0f}% | "
-            f"Breakeven trigger: {BREAKEVEN_ATR_TRIGGER}x ATR | "
+            f"Trailing stop: {TRAILING_STOP_PCT*100:.0f}% | "
+            f"Pyramid trigger: +{PYRAMID_TRIGGER_PCT*100:.0f}% | "
             f"BTC filter: {BTC_CORRELATION_FILTER}"
         )
         self.stream.run()

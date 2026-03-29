@@ -67,13 +67,13 @@ CRYPTO_CANDIDATES = [
     # Layer-1 / smart contract
     "AVAX/USD", "ADA/USD", "DOT/USD", "ALGO/USD", "NEAR/USD",
     # DeFi blue chips
-    "LINK/USD", "AAVE/USD", "UNI/USD", "CRV/USD",
-    # Layer-2 / ecosystem
-    "MATIC/USD",
+    "LINK/USD", "AAVE/USD", "CRV/USD",
     # Store-of-value / payment
     "LTC/USD", "BCH/USD",
     # Infrastructure
-    "ATOM/USD", "GRT/USD",
+    "ATOM/USD",
+    # Additional liquid pairs
+    "SHIB/USD", "PEPE/USD", "WIF/USD",
 ]
 
 
