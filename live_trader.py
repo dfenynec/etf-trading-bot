@@ -219,25 +219,65 @@ class LiveCryptoTrader:
         return self._daily_halt
 
     # ------------------------------------------------------------------
-    # Breakeven stop
+    # Manual stop / take-profit / breakeven (Alpaca disallows crypto brackets)
     # ------------------------------------------------------------------
 
-    def _check_breakeven(self, alpaca_sym: str, price: float) -> None:
+    def _check_exit_conditions(self, alpaca_sym: str, symbol: str, price: float) -> bool:
         """
-        Once price is BREAKEVEN_ATR_TRIGGER × ATR above entry,
-        move the stop order to entry price — ensuring the trade can't lose.
+        Check manual stop-loss, take-profit, and breakeven for a held position.
+        Returns True if the position was closed (caller should skip further logic).
+        Alpaca does not support bracket orders for crypto, so we manage all
+        exits in-process on every 1-min bar.
         """
         entry = self._entries.get(alpaca_sym)
-        if not entry or entry["breakeven_set"]:
-            return
-        trigger_price = entry["price"] + BREAKEVEN_ATR_TRIGGER * entry["atr"]
-        if price >= trigger_price:
-            logger.info(
-                f"[LIVE] Breakeven trigger: {alpaca_sym} @ ${price:.4f} "
-                f"(entry ${entry['price']:.4f} + {BREAKEVEN_ATR_TRIGGER}x ATR)"
-            )
-            if self.trader.move_stop_to_breakeven(alpaca_sym, entry["price"]):
+        if not entry:
+            return False
+
+        stop = entry["stop"]
+        tp   = entry["tp"]
+
+        # --- Breakeven: move stop to entry once price advances 1x ATR ---
+        if not entry["breakeven_set"]:
+            trigger_price = entry["price"] + BREAKEVEN_ATR_TRIGGER * entry["atr"]
+            if price >= trigger_price:
+                entry["stop"]          = entry["price"]
                 entry["breakeven_set"] = True
+                logger.info(
+                    f"[LIVE] Breakeven: {symbol} stop moved to ${entry['price']:.4f} "
+                    f"(triggered @ ${price:.4f})"
+                )
+
+        # --- Stop-loss hit ---
+        if price <= stop:
+            logger.info(
+                f"[LIVE] *** STOP HIT {symbol} @ ${price:.4f} "
+                f"(stop was ${stop:.4f}) ***"
+            )
+            pnl_pct = (price - entry["price"]) / entry["price"] * 100
+            if self.trader.sell_crypto(alpaca_sym):
+                self._entries.pop(alpaca_sym, None)
+                self._last_traded[alpaca_sym] = time.time()
+                self._invalidate_pos_cache()
+                log_trade("CLOSE", symbol, 0, price, 0,
+                          note=f"SL hit | entry=${entry['price']:.4f} | pnl={pnl_pct:+.2f}%")
+            return True
+
+        # --- Take-profit hit ---
+        if price >= tp:
+            logger.info(
+                f"[LIVE] *** TP HIT {symbol} @ ${price:.4f} "
+                f"(target was ${tp:.4f}) ***"
+            )
+            pnl_pct = (price - entry["price"]) / entry["price"] * 100
+            if self.trader.sell_crypto(alpaca_sym):
+                self._entries.pop(alpaca_sym, None)
+                self._last_traded[alpaca_sym] = time.time()
+                self._invalidate_pos_cache()
+                log_trade("CLOSE", symbol, 0, price, 0,
+                          note=f"TP hit | entry=${entry['price']:.4f} | pnl={pnl_pct:+.2f}%")
+            return True
+
+        return False
 
     # ------------------------------------------------------------------
     # WebSocket handler — fires on every 1-minute bar close
@@ -275,9 +315,10 @@ class LiveCryptoTrader:
             f"holding: {holding}"
         )
 
-        # Breakeven check for open positions
+        # Manual stop / TP / breakeven check for open positions
         if holding:
-            self._check_breakeven(alpaca_sym, price)
+            if self._check_exit_conditions(alpaca_sym, symbol, price):
+                return  # Position was closed — skip buy/sell logic below
 
         # Cooldown — prevent signal-flip overtrading
         if time.time() - self._last_traded.get(alpaca_sym, 0) < TRADE_COOLDOWN:
@@ -322,7 +363,11 @@ class LiveCryptoTrader:
             )
             if self.trader.buy_crypto(symbol, qty, stop_loss=stop, take_profit=tp):
                 self._last_traded[alpaca_sym] = time.time()
-                self._entries[alpaca_sym]     = {"price": price, "atr": atr, "breakeven_set": False}
+                self._entries[alpaca_sym]     = {
+                    "price": price, "atr": atr,
+                    "stop": stop, "tp": tp,
+                    "breakeven_set": False,
+                }
                 self._invalidate_pos_cache()
                 log_trade("BUY", symbol, qty, price, signal["score"], stop, tp)
 

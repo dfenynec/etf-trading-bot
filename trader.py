@@ -185,20 +185,16 @@ class AlpacaTrader:
 
     def buy_crypto(self, symbol: str, qty: float,
                    stop_loss: float = None, take_profit: float = None) -> bool:
-        """Place a fractional bracket buy order for crypto (GTC, 24/7)."""
+        """Place a plain market buy order for crypto (GTC, 24/7).
+        Alpaca does NOT support bracket orders for crypto — stops and targets
+        are managed manually in LiveCryptoTrader.on_bar()."""
         try:
-            kwargs = dict(
+            result = self.client.submit_order(MarketOrderRequest(
                 symbol=symbol,
                 qty=round(qty, 6),
                 side=OrderSide.BUY,
                 time_in_force=TimeInForce.GTC,
-            )
-            if stop_loss and take_profit:
-                kwargs["order_class"]  = OrderClass.BRACKET
-                kwargs["stop_loss"]    = StopLossRequest(stop_price=round(stop_loss, 4))
-                kwargs["take_profit"]  = TakeProfitRequest(limit_price=round(take_profit, 4))
-
-            result = self.client.submit_order(MarketOrderRequest(**kwargs))
+            ))
             logger.info(f"CRYPTO BUY submitted: {qty:.6f}x {symbol} | SL=${stop_loss} TP=${take_profit} | ID: {result.id}")
             return True
         except Exception as e:
