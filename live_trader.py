@@ -42,6 +42,7 @@ from risk_manager import calculate_stop_loss, calculate_take_profit, calculate_c
 from trade_journal import log_trade
 from trader import AlpacaTrader
 from performance import kelly_risk_pct
+from learner import is_symbol_blacklisted, print_learned_state
 
 logger = logging.getLogger(__name__)
 
@@ -390,6 +391,11 @@ class LiveCryptoTrader:
             if self._check_daily_halt():
                 return
 
+            # Learned blacklist — skip symbols that consistently lose
+            if is_symbol_blacklisted(symbol):
+                logger.info(f"[LIVE] Skip {symbol}: blacklisted by learner (poor win rate)")
+                return
+
             # BTC correlation filter — don't buy altcoins in a BTC downtrend
             if BTC_CORRELATION_FILTER and symbol != "BTC/USD":
                 btc_sig = self._get_btc_signal()
@@ -437,7 +443,10 @@ class LiveCryptoTrader:
                     "trail_active": False,  # flips True once trail exceeds initial stop
                 }
                 self._invalidate_pos_cache()
-                log_trade("BUY", symbol, qty, price, signal["score"], stop, tp)
+                # Log reasons so the learner can trace which indicators fired
+                reasons_str = " | ".join(signal.get("reasons", [])[:5])
+                log_trade("BUY", symbol, qty, price, signal["score"], stop, tp,
+                          note=f"{signal.get('regime', '')} | {reasons_str}")
 
         # ---- SELL -------------------------------------------------------
         elif signal["signal"] == "SELL" and holding:
@@ -454,6 +463,7 @@ class LiveCryptoTrader:
 
     def run(self) -> None:
         self._refresh_base_data()
+        print_learned_state()  # Show learned weights in Railway logs at startup
 
         # Subscribe to ALL candidates — on_bar filters to _active_symbols only
         for sym in CRYPTO_CANDIDATES:

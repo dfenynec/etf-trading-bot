@@ -7,8 +7,16 @@ from config import (
     MR_RSI_OVERSOLD, MR_RSI_OVERBOUGHT, MIN_MR_SCORE,
     ADX_RANGING_THRESHOLD, ADX_TRENDING_THRESHOLD,
 )
+from learner import get_indicator_weight, get_regime_weight
 
 logger = logging.getLogger(__name__)
+
+
+def _w(indicator_name: str, base_score: int) -> float:
+    """Apply learned weight to an indicator's score contribution.
+    Example: MACD has weight 1.4 and base score +2 → returns +2.8
+    The final score is rounded to int after all indicators are summed."""
+    return base_score * get_indicator_weight(indicator_name)
 
 
 def score_etf(df: pd.DataFrame, ticker: str) -> dict:
@@ -178,15 +186,15 @@ def _score_trend_following(latest, prev) -> tuple:
 
     Max range: -9 to +9
     """
-    score   = 0
+    score   = 0.0
     reasons = []
 
-    # 1. RSI direction
+    # 1. RSI direction (weighted by learned effectiveness)
     if latest["rsi"] < RSI_OVERSOLD:
-        score += 1
+        score += _w("rsi", 1)
         reasons.append(f"RSI oversold ({latest['rsi']:.1f})")
     elif latest["rsi"] > RSI_OVERBOUGHT:
-        score -= 1
+        score += _w("rsi", -1)
         reasons.append(f"RSI overbought ({latest['rsi']:.1f})")
     else:
         reasons.append(f"RSI neutral ({latest['rsi']:.1f})")
@@ -195,16 +203,16 @@ def _score_trend_following(latest, prev) -> tuple:
     macd_bull_cross = latest["macd"] > latest["macd_signal"] and prev["macd"] <= prev["macd_signal"]
     macd_bear_cross = latest["macd"] < latest["macd_signal"] and prev["macd"] >= prev["macd_signal"]
     if macd_bull_cross:
-        score += 2
+        score += _w("macd", 2)
         reasons.append("MACD bullish crossover (strong)")
     elif macd_bear_cross:
-        score -= 2
+        score += _w("macd", -2)
         reasons.append("MACD bearish crossover (strong)")
     elif latest["macd"] > latest["macd_signal"]:
-        score += 1
+        score += _w("macd", 1)
         reasons.append("MACD above signal")
     else:
-        score -= 1
+        score += _w("macd", -1)
         reasons.append("MACD below signal")
 
     # 3. SMA 50/200 — informational only
@@ -216,10 +224,10 @@ def _score_trend_following(latest, prev) -> tuple:
 
     # 4. Bollinger Bands
     if latest["bb_pct"] < 0.15:
-        score += 1
+        score += _w("bollinger", 1)
         reasons.append("Price near BB lower band (oversold zone)")
     elif latest["bb_pct"] > 0.85:
-        score -= 1
+        score += _w("bollinger", -1)
         reasons.append("Price near BB upper band (overbought zone)")
     else:
         reasons.append(f"Price in BB mid-zone ({latest['bb_pct']:.2f})")
@@ -227,10 +235,10 @@ def _score_trend_following(latest, prev) -> tuple:
     # 5. Volume confirmation (amplifies existing direction)
     if latest["volume_ratio"] > 1.5:
         if score > 0:
-            score += 1
+            score += _w("volume", 1)
             reasons.append(f"High volume confirms bullish ({latest['volume_ratio']:.1f}x avg)")
         elif score < 0:
-            score -= 1
+            score += _w("volume", -1)
             reasons.append(f"High volume confirms bearish ({latest['volume_ratio']:.1f}x avg)")
         else:
             reasons.append(f"High volume but mixed signals ({latest['volume_ratio']:.1f}x avg)")
@@ -241,10 +249,10 @@ def _score_trend_following(latest, prev) -> tuple:
     stoch_bull = latest["stoch_k"] < 20 and latest["stoch_k"] > latest["stoch_d"]
     stoch_bear = latest["stoch_k"] > 80 and latest["stoch_k"] < latest["stoch_d"]
     if stoch_bull:
-        score += 1
+        score += _w("stochastic", 1)
         reasons.append(f"Stochastic oversold + turning up ({latest['stoch_k']:.1f})")
     elif stoch_bear:
-        score -= 1
+        score += _w("stochastic", -1)
         reasons.append(f"Stochastic overbought + turning down ({latest['stoch_k']:.1f})")
     else:
         reasons.append(f"Stochastic neutral ({latest['stoch_k']:.1f})")
@@ -254,37 +262,37 @@ def _score_trend_following(latest, prev) -> tuple:
     ema_fresh_bull = ema_bull and prev["ema_9"] <= prev["ema_21"]
     ema_fresh_bear = not ema_bull and prev["ema_9"] >= prev["ema_21"]
     if ema_fresh_bull:
-        score += 2
+        score += _w("ema_cross", 2)
         reasons.append("EMA 9/21 fresh bullish cross (strong)")
     elif ema_fresh_bear:
-        score -= 2
+        score += _w("ema_cross", -2)
         reasons.append("EMA 9/21 fresh bearish cross (strong)")
     elif ema_bull:
-        score += 1
+        score += _w("ema_cross", 1)
         reasons.append("EMA 9 above EMA 21 (bullish trend)")
     else:
-        score -= 1
+        score += _w("ema_cross", -1)
         reasons.append("EMA 9 below EMA 21 (bearish trend)")
 
     # 8. OBV trend
     if latest["obv_trend"] > 0 and latest["obv_trend"] > prev["obv_trend"]:
-        score += 1
+        score += _w("obv", 1)
         reasons.append("OBV rising — buying pressure building")
     elif latest["obv_trend"] < 0 and latest["obv_trend"] < prev["obv_trend"]:
-        score -= 1
+        score += _w("obv", -1)
         reasons.append("OBV falling — selling pressure building")
     else:
         reasons.append("OBV neutral")
 
     # 9. Supertrend
     if latest["supertrend"] == 1:
-        score += 1
+        score += _w("supertrend", 1)
         reasons.append("Supertrend: BULLISH (price above trend line)")
     else:
-        score -= 1
+        score += _w("supertrend", -1)
         reasons.append("Supertrend: BEARISH (price below trend line)")
 
-    return score, reasons
+    return round(score), reasons
 
 
 def _score_mean_reversion(latest, prev) -> tuple:
@@ -303,49 +311,49 @@ def _score_mean_reversion(latest, prev) -> tuple:
 
     Max range: -5 to +5
     """
-    score   = 0
+    score   = 0.0
     reasons = []
 
-    # 1. Bollinger Bands — primary mean-reversion signal
+    # 1. Bollinger Bands — primary mean-reversion signal (weighted)
     if latest["bb_pct"] < 0.10:
-        score += 2
+        score += _w("bollinger", 2)
         reasons.append(f"Price at BB lower band — strong oversold ({latest['bb_pct']:.2f})")
     elif latest["bb_pct"] < 0.25:
-        score += 1
+        score += _w("bollinger", 1)
         reasons.append(f"Price near BB lower band — oversold ({latest['bb_pct']:.2f})")
     elif latest["bb_pct"] > 0.90:
-        score -= 2
+        score += _w("bollinger", -2)
         reasons.append(f"Price at BB upper band — strong overbought ({latest['bb_pct']:.2f})")
     elif latest["bb_pct"] > 0.75:
-        score -= 1
+        score += _w("bollinger", -1)
         reasons.append(f"Price near BB upper band — overbought ({latest['bb_pct']:.2f})")
     else:
         reasons.append(f"Price in BB mid-range ({latest['bb_pct']:.2f}) — no edge")
 
-    # 2. RSI extremes (tighter thresholds than trend mode)
+    # 2. RSI extremes (tighter thresholds than trend mode, weighted)
     if latest["rsi"] < MR_RSI_OVERSOLD:
-        score += 2
+        score += _w("rsi", 2)
         reasons.append(f"RSI deeply oversold ({latest['rsi']:.1f})")
     elif latest["rsi"] < 40:
-        score += 1
+        score += _w("rsi", 1)
         reasons.append(f"RSI oversold ({latest['rsi']:.1f})")
     elif latest["rsi"] > MR_RSI_OVERBOUGHT:
-        score -= 2
+        score += _w("rsi", -2)
         reasons.append(f"RSI deeply overbought ({latest['rsi']:.1f})")
     elif latest["rsi"] > 60:
-        score -= 1
+        score += _w("rsi", -1)
         reasons.append(f"RSI overbought ({latest['rsi']:.1f})")
     else:
         reasons.append(f"RSI neutral ({latest['rsi']:.1f})")
 
-    # 3. Stochastic — turning point confirmation
+    # 3. Stochastic — turning point confirmation (weighted)
     stoch_bull = latest["stoch_k"] < 20 and latest["stoch_k"] > latest["stoch_d"]
     stoch_bear = latest["stoch_k"] > 80 and latest["stoch_k"] < latest["stoch_d"]
     if stoch_bull:
-        score += 1
+        score += _w("stochastic", 1)
         reasons.append(f"Stochastic oversold + turning up ({latest['stoch_k']:.1f})")
     elif stoch_bear:
-        score -= 1
+        score += _w("stochastic", -1)
         reasons.append(f"Stochastic overbought + turning down ({latest['stoch_k']:.1f})")
     else:
         reasons.append(f"Stochastic neutral ({latest['stoch_k']:.1f})")
@@ -353,7 +361,7 @@ def _score_mean_reversion(latest, prev) -> tuple:
     # 4. Volume caution — high volume in a ranging market often signals a breakout,
     #    not a reversion. Halve confidence to avoid fading a genuine move.
     if latest["volume_ratio"] > 2.0:
-        score = score // 2
+        score = score / 2
         reasons.append(
             f"Caution: unusual volume in ranging market ({latest['volume_ratio']:.1f}x avg) "
             f"— may be breaking out, confidence halved"
@@ -361,7 +369,7 @@ def _score_mean_reversion(latest, prev) -> tuple:
     else:
         reasons.append(f"Normal volume ({latest['volume_ratio']:.1f}x avg) — mean reversion intact")
 
-    return score, reasons
+    return round(score), reasons
 
 
 def rank_buy_candidates(signals: list) -> list:
