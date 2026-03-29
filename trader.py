@@ -108,7 +108,12 @@ class AlpacaTrader:
 
     def buy(self, ticker: str, qty: int,
             stop_loss: float = None, take_profit: float = None) -> bool:
-        """Place a bracket buy order with stop-loss and take-profit enforced by Alpaca."""
+        """
+        Place a buy order with server-side stop-loss.
+        - stop_loss + take_profit → BRACKET (stop + TP)
+        - stop_loss only          → OTO (stop only, no TP cap — lets winners run)
+        - neither                 → plain market order
+        """
         try:
             kwargs = dict(
                 symbol=ticker,
@@ -120,9 +125,12 @@ class AlpacaTrader:
                 kwargs["order_class"]  = OrderClass.BRACKET
                 kwargs["stop_loss"]    = StopLossRequest(stop_price=round(stop_loss, 2))
                 kwargs["take_profit"]  = TakeProfitRequest(limit_price=round(take_profit, 2))
+            elif stop_loss:
+                kwargs["order_class"]  = OrderClass.OTO
+                kwargs["stop_loss"]    = StopLossRequest(stop_price=round(stop_loss, 2))
 
             result = self.client.submit_order(MarketOrderRequest(**kwargs))
-            logger.info(f"BUY submitted: {qty}x {ticker} | SL=${stop_loss} TP=${take_profit} | ID: {result.id}")
+            logger.info(f"BUY submitted: {qty}x {ticker} | SL=${stop_loss} TP={take_profit} | ID: {result.id}")
             return True
         except Exception as e:
             logger.error(f"BUY failed for {ticker}: {e}")
@@ -153,7 +161,11 @@ class AlpacaTrader:
 
     def short(self, ticker: str, qty: int,
               stop_loss: float = None, take_profit: float = None) -> bool:
-        """Open a short bracket order — stop is ABOVE entry, target is BELOW entry."""
+        """
+        Open a short order — stop is ABOVE entry, target is BELOW entry.
+        - stop_loss + take_profit → BRACKET
+        - stop_loss only          → OTO (no TP cap)
+        """
         try:
             kwargs = dict(
                 symbol=ticker,
@@ -165,9 +177,12 @@ class AlpacaTrader:
                 kwargs["order_class"]  = OrderClass.BRACKET
                 kwargs["stop_loss"]    = StopLossRequest(stop_price=round(stop_loss, 2))
                 kwargs["take_profit"]  = TakeProfitRequest(limit_price=round(take_profit, 2))
+            elif stop_loss:
+                kwargs["order_class"]  = OrderClass.OTO
+                kwargs["stop_loss"]    = StopLossRequest(stop_price=round(stop_loss, 2))
 
             result = self.client.submit_order(MarketOrderRequest(**kwargs))
-            logger.info(f"SHORT submitted: {qty}x {ticker} | SL=${stop_loss} TP=${take_profit} | ID: {result.id}")
+            logger.info(f"SHORT submitted: {qty}x {ticker} | SL=${stop_loss} TP={take_profit} | ID: {result.id}")
             return True
         except Exception as e:
             logger.error(f"SHORT failed for {ticker}: {e}")

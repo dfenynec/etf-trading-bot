@@ -37,6 +37,7 @@ def calculate_position_size(
     stop_price: float,
     score: int = 0,
     atr: float = 0.0,
+    risk_pct: float = None,
 ) -> int:
     """
     Size an ETF position using the 1% risk rule.
@@ -47,11 +48,13 @@ def calculate_position_size(
         stop_price:      Stop-loss price (must be below entry for longs)
         score:           Indicator score (unused now — kept for API compatibility)
         atr:             ATR (unused now — kept for API compatibility)
+        risk_pct:        Override risk fraction (Kelly-adjusted). Defaults to RISK_PER_TRADE_PCT.
 
     Returns:
         Integer number of shares, minimum 1.
     """
-    risk_dollars  = portfolio_value * RISK_PER_TRADE_PCT
+    effective_risk = risk_pct if risk_pct is not None else RISK_PER_TRADE_PCT
+    risk_dollars  = portfolio_value * effective_risk
     stop_distance = abs(price - stop_price)
 
     if stop_distance <= 0:

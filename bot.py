@@ -23,7 +23,8 @@ from screener import screen_etfs
 from data_fetcher import fetch_all_etfs
 from indicators import calculate_indicators
 from risk_manager import calculate_position_size, calculate_stop_loss, calculate_take_profit
-from performance import print_stats
+from performance import print_stats, kelly_risk_pct
+from learner import is_symbol_blacklisted
 from strategy import rank_buy_candidates, rank_sell_candidates, score_etf
 from trader import AlpacaTrader
 from live_trader import LiveCryptoTrader
@@ -131,6 +132,9 @@ def run_etf_strategy() -> None:
     short_positions = {k: v for k, v in trader.get_short_positions().items() if "/" not in k}
     buying_power    = trader.get_buying_power()
 
+    # Kelly-adjusted risk % for ETFs (same system as crypto)
+    risk_pct = kelly_risk_pct()
+
     # --- Open new LONG positions ---
     for candidate in rank_buy_candidates(signals):
         ticker = candidate["ticker"]
@@ -138,24 +142,28 @@ def run_etf_strategy() -> None:
             continue
         if len(long_positions) >= MAX_POSITIONS:
             break
+        if is_symbol_blacklisted(ticker):
+            logger.info(f"  Skip {ticker}: blacklisted by learner")
+            continue
 
         price = candidate["price"]
         atr   = candidate["atr"]
         score = candidate["score"]
         stop  = calculate_stop_loss(price, atr)
-        tp    = calculate_take_profit(price, atr)
-        qty   = calculate_position_size(portfolio_value, price, stop_price=stop)
+        qty   = calculate_position_size(portfolio_value, price, stop_price=stop,
+                                        risk_pct=risk_pct)
         cost  = qty * price
 
         if cost > buying_power:
             logger.info(f"  Skip long {ticker}: insufficient buying power (need ${cost:.2f}, have ${buying_power:.2f})")
             continue
-        logger.info(f"  → BUY  {qty}x {ticker} @ ~${price:.4f} | Stop: ${stop} | Target: ${tp} | Score: {score}")
+        logger.info(f"  → BUY  {qty}x {ticker} @ ~${price:.4f} | Stop: ${stop} | Score: {score} | Risk: {risk_pct*100:.2f}%")
 
-        if trader.buy(ticker, qty, stop_loss=stop, take_profit=tp):
+        if trader.buy(ticker, qty, stop_loss=stop):
             long_positions[ticker] = None
             buying_power -= cost
-            log_trade("BUY", ticker, qty, price, score, stop, tp)
+            log_trade("BUY", ticker, qty, price, score, stop,
+                      note=f"{candidate.get('regime', '')} | no TP cap — signal exit")
 
     # --- Open new SHORT positions ---
     for candidate in rank_sell_candidates(signals):
@@ -164,24 +172,28 @@ def run_etf_strategy() -> None:
             continue
         if len(short_positions) >= MAX_SHORT_POSITIONS:
             break
+        if is_symbol_blacklisted(ticker):
+            logger.info(f"  Skip short {ticker}: blacklisted by learner")
+            continue
 
         price = candidate["price"]
         atr   = candidate["atr"]
         score = candidate["score"]
         stop  = calculate_take_profit(price, atr)  # Stop is ABOVE entry for shorts
-        tp    = calculate_stop_loss(price, atr)    # Target is BELOW entry for shorts
-        qty   = calculate_position_size(portfolio_value, price, stop_price=stop)
+        qty   = calculate_position_size(portfolio_value, price, stop_price=stop,
+                                        risk_pct=risk_pct)
         cost  = qty * price
 
         if cost > buying_power:
             logger.info(f"  Skip short {ticker}: insufficient buying power (need ${cost:.2f}, have ${buying_power:.2f})")
             continue
-        logger.info(f"  → SHORT {qty}x {ticker} @ ~${price:.4f} | Stop: ${stop} | Target: ${tp} | Score: {score}")
+        logger.info(f"  → SHORT {qty}x {ticker} @ ~${price:.4f} | Stop: ${stop} | Score: {score} | Risk: {risk_pct*100:.2f}%")
 
-        if trader.short(ticker, qty, stop_loss=stop, take_profit=tp):
+        if trader.short(ticker, qty, stop_loss=stop):
             short_positions[ticker] = None
             buying_power -= cost
-            log_trade("SHORT", ticker, qty, price, score, stop, tp)
+            log_trade("SHORT", ticker, qty, price, score, stop,
+                      note=f"{candidate.get('regime', '')} | no TP cap — signal exit")
 
     logger.info("ETF run complete.\n")
 
