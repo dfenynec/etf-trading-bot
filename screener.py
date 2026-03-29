@@ -62,8 +62,18 @@ ETF_CANDIDATES = [
 ]
 
 CRYPTO_CANDIDATES = [
-    "BTC/USD", "ETH/USD", "SOL/USD", "AVAX/USD", "LINK/USD",
-    "DOT/USD", "AAVE/USD", "LTC/USD", "BCH/USD",
+    # Large caps — high liquidity, tight spreads
+    "BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "DOGE/USD",
+    # Layer-1 / smart contract
+    "AVAX/USD", "ADA/USD", "DOT/USD", "ALGO/USD", "NEAR/USD",
+    # DeFi blue chips
+    "LINK/USD", "AAVE/USD", "UNI/USD", "CRV/USD",
+    # Layer-2 / ecosystem
+    "MATIC/USD",
+    # Store-of-value / payment
+    "LTC/USD", "BCH/USD",
+    # Infrastructure
+    "ATOM/USD", "GRT/USD",
 ]
 
 

@@ -12,7 +12,7 @@ PAPER_TRADING = True  # Switch to False ONLY when ready for real money
 # The full candidate pools live in screener.py (ETF_CANDIDATES, CRYPTO_CANDIDATES).
 # These settings control how many the screener selects for active trading.
 SCREEN_TOP_N_ETF    = 12          # Trade the top 12 ETFs by momentum (from ~35 candidates)
-SCREEN_TOP_N_CRYPTO = 5           # Trade the top 5 crypto pairs by momentum (from 9 candidates)
+SCREEN_TOP_N_CRYPTO = 8           # Watch the top 8 crypto pairs by momentum (from 19 candidates)
 SCREEN_MIN_VOLUME   = 500_000     # Skip ETFs with avg daily volume below this
 
 # --- Technical indicator settings ---
