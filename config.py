@@ -39,6 +39,7 @@ MAX_SHORT_POSITIONS = 3       # Max open short positions at once
 MAX_POSITION_PCT = 0.10       # Max 10% of portfolio per position (10% rule)
 STOP_LOSS_ATR_MULT = 3.0      # Stop-loss = entry - 3 * ATR (wider — survives normal crypto noise)
 TAKE_PROFIT_ATR_MULT = 4.0    # Take-profit = entry + 4 * ATR (keep 4:3 reward/risk)
+RISK_PER_TRADE_PCT = 0.01     # Risk exactly 1% of portfolio per trade (position sized by stop distance)
 MIN_BUY_SCORE = 4             # Minimum score to trigger a BUY (4+ indicators must agree)
 MIN_SELL_SCORE = -4           # Maximum score to trigger a SELL (tightened to match)
 

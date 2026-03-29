@@ -28,7 +28,7 @@ from alpaca.data.live import CryptoDataStream
 
 from config import (
     ALPACA_API_KEY, ALPACA_SECRET_KEY,
-    MAX_CRYPTO_POSITIONS, MAX_CRYPTO_POSITION_PCT,
+    MAX_CRYPTO_POSITIONS,
     DAILY_LOSS_LIMIT_PCT, BREAKEVEN_ATR_TRIGGER,
     BTC_CORRELATION_FILTER, POSITION_CACHE_TTL,
 )
@@ -36,7 +36,7 @@ from screener import CRYPTO_CANDIDATES, screen_crypto
 from data_fetcher import fetch_all_crypto
 from indicators import calculate_indicators
 from strategy import score_etf
-from risk_manager import calculate_stop_loss, calculate_take_profit
+from risk_manager import calculate_stop_loss, calculate_take_profit, calculate_crypto_position_size
 from trade_journal import log_trade
 from trader import AlpacaTrader
 
@@ -306,15 +306,15 @@ class LiveCryptoTrader:
 
             portfolio_value = self.trader.get_portfolio_value()
             crypto_bp       = self.trader.get_crypto_buying_power()
-            max_dollars     = min(portfolio_value * MAX_CRYPTO_POSITION_PCT, crypto_bp * 0.98)
-            qty             = math.floor(max_dollars / price * 1_000_000) / 1_000_000
+            stop = calculate_stop_loss(price, atr)
+            tp   = calculate_take_profit(price, atr)
+            qty  = calculate_crypto_position_size(
+                portfolio_value, price, stop, buying_power=crypto_bp * 0.98
+            )
 
             if qty <= 0:
                 logger.info(f"[LIVE] Skip {symbol}: not enough cash (bp=${crypto_bp:.2f})")
                 return
-
-            stop = calculate_stop_loss(price, atr)
-            tp   = calculate_take_profit(price, atr)
 
             logger.info(
                 f"[LIVE] *** BUY  {symbol} | {qty:.6f} @ ${price:.4f} "

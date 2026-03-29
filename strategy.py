@@ -35,15 +35,23 @@ def score_etf(df: pd.DataFrame, ticker: str) -> dict:
     prev   = df.iloc[-2]
 
     adx_value = latest["adx"]
-    regime    = _detect_regime(adx_value)
-    trending  = (regime == "TRENDING")
 
-    if regime == "TRENDING":
+    # --- Breakout check (overrides regime — detected before ADX classification) ---
+    is_breakout, vol_ratio, resistance = _check_breakout(df, latest)
+    if is_breakout:
+        regime         = "BREAKOUT"
+        score, reasons = _score_breakout(latest, prev, vol_ratio, resistance)
+        reasons.insert(0, f"Price above 20d high ${resistance:.4f} with {vol_ratio:.1f}x volume — BREAKOUT mode")
+        buy_threshold  = 2   # Lower threshold: the breakout itself is strong confirmation
+        sell_threshold = 99  # Don't short a breakout
+    elif _detect_regime(adx_value) == "TRENDING":
+        regime         = "TRENDING"
         score, reasons = _score_trend_following(latest, prev)
         reasons.insert(0, f"ADX {adx_value:.1f} ≥ {ADX_TRENDING_THRESHOLD} — TRENDING → trend-following mode")
         buy_threshold  =  MIN_BUY_SCORE
         sell_threshold =  MIN_SELL_SCORE
     else:
+        regime         = "RANGING"
         score, reasons = _score_mean_reversion(latest, prev)
         reasons.insert(0, f"ADX {adx_value:.1f} < {ADX_TRENDING_THRESHOLD} — RANGING → mean-reversion mode")
         buy_threshold  =  MIN_MR_SCORE
@@ -57,16 +65,88 @@ def score_etf(df: pd.DataFrame, ticker: str) -> dict:
         signal = "HOLD"
 
     return {
-        "ticker":   ticker,
-        "score":    score,
-        "signal":   signal,
-        "price":    round(latest["close"], 4),
-        "atr":      round(latest["atr"], 6),
-        "adx":      round(adx_value, 1),
-        "trending": trending,
-        "regime":   regime,
-        "reasons":  reasons,
+        "ticker":     ticker,
+        "score":      score,
+        "signal":     signal,
+        "price":      round(latest["close"], 4),
+        "atr":        round(latest["atr"], 6),
+        "adx":        round(adx_value, 1),
+        "trending":   (regime == "TRENDING"),
+        "regime":     regime,
+        "resistance": round(resistance, 4) if is_breakout else None,
+        "reasons":    reasons,
     }
+
+
+def _check_breakout(df, latest) -> tuple:
+    """
+    Detect a price breakout above the 20-day resistance level with volume confirmation.
+
+    Conditions:
+      - Current close > highest high of the previous 20 candles
+      - Current volume > 1.2x the 20-bar average volume
+
+    Returns:
+      (is_breakout: bool, vol_ratio: float, resistance: float)
+    """
+    if len(df) < 22:
+        return False, 1.0, 0.0
+
+    # Resistance = highest high of the 20 candles BEFORE today
+    resistance  = float(df["high"].iloc[-21:-1].max())
+    current_close = float(latest["close"])
+
+    vol_avg_20  = float(df["volume"].iloc[-21:-1].mean())
+    vol_ratio   = float(latest["volume"]) / vol_avg_20 if vol_avg_20 > 0 else 1.0
+
+    is_breakout = (current_close > resistance) and (vol_ratio >= 1.2)
+    return is_breakout, vol_ratio, resistance
+
+
+def _score_breakout(latest, prev, vol_ratio: float, resistance: float) -> tuple:
+    """
+    Score for breakout regime.
+
+    The price already cleared resistance with volume (+2 base).
+    Secondary indicators confirm strength and filter false breakouts.
+
+    Breakdown:
+      Breakout confirmed  : +2  (always — it's why we're here)
+      Volume spike ≥ 2.0x : +2 / ≥ 1.5x: +1 / else: +0
+      MACD bullish        : +1
+      RSI not overbought  : +1 / overbought: -1
+
+    Max: +6, entry threshold: +2
+    """
+    score   = 2   # The breakout itself
+    reasons = [f"Breakout above resistance ${resistance:.4f} (+2)"]
+
+    # Volume strength
+    if vol_ratio >= 2.0:
+        score += 2
+        reasons.append(f"Volume surge {vol_ratio:.1f}x avg — strong conviction (+2)")
+    elif vol_ratio >= 1.5:
+        score += 1
+        reasons.append(f"Volume spike {vol_ratio:.1f}x avg (+1)")
+    else:
+        reasons.append(f"Volume {vol_ratio:.1f}x avg — moderate (+0)")
+
+    # MACD confirmation
+    if latest["macd"] > latest["macd_signal"]:
+        score += 1
+        reasons.append("MACD bullish (+1)")
+    else:
+        reasons.append("MACD bearish (+0)")
+
+    # RSI filter (overbought breakouts often fail immediately)
+    if latest["rsi"] < 70:
+        score += 1
+        reasons.append(f"RSI not overbought ({latest['rsi']:.1f}) (+1)")
+    else:
+        score -= 1
+        reasons.append(f"RSI overbought ({latest['rsi']:.1f}) — risk of reversal (-1)")
+
+    return score, reasons
 
 
 def _detect_regime(adx: float) -> str:

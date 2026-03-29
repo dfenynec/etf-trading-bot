@@ -23,6 +23,7 @@ from screener import screen_etfs
 from data_fetcher import fetch_all_etfs
 from indicators import calculate_indicators
 from risk_manager import calculate_position_size, calculate_stop_loss, calculate_take_profit
+from performance import print_stats
 from strategy import rank_buy_candidates, rank_sell_candidates, score_etf
 from trader import AlpacaTrader
 from live_trader import LiveCryptoTrader
@@ -141,15 +142,14 @@ def run_etf_strategy() -> None:
         price = candidate["price"]
         atr   = candidate["atr"]
         score = candidate["score"]
-        qty   = calculate_position_size(portfolio_value, price, score=score, atr=atr)
+        stop  = calculate_stop_loss(price, atr)
+        tp    = calculate_take_profit(price, atr)
+        qty   = calculate_position_size(portfolio_value, price, stop_price=stop)
         cost  = qty * price
 
         if cost > buying_power:
             logger.info(f"  Skip long {ticker}: insufficient buying power (need ${cost:.2f}, have ${buying_power:.2f})")
             continue
-
-        stop = calculate_stop_loss(price, atr)
-        tp   = calculate_take_profit(price, atr)
         logger.info(f"  → BUY  {qty}x {ticker} @ ~${price:.4f} | Stop: ${stop} | Target: ${tp} | Score: {score}")
 
         if trader.buy(ticker, qty, stop_loss=stop, take_profit=tp):
@@ -168,15 +168,14 @@ def run_etf_strategy() -> None:
         price = candidate["price"]
         atr   = candidate["atr"]
         score = candidate["score"]
-        qty   = calculate_position_size(portfolio_value, price, score=score, atr=atr)
+        stop  = calculate_take_profit(price, atr)  # Stop is ABOVE entry for shorts
+        tp    = calculate_stop_loss(price, atr)    # Target is BELOW entry for shorts
+        qty   = calculate_position_size(portfolio_value, price, stop_price=stop)
         cost  = qty * price
 
         if cost > buying_power:
             logger.info(f"  Skip short {ticker}: insufficient buying power (need ${cost:.2f}, have ${buying_power:.2f})")
             continue
-
-        stop = calculate_take_profit(price, atr)  # Stop is ABOVE entry for shorts
-        tp   = calculate_stop_loss(price, atr)     # Target is BELOW entry for shorts
         logger.info(f"  → SHORT {qty}x {ticker} @ ~${price:.4f} | Stop: ${stop} | Target: ${tp} | Score: {score}")
 
         if trader.short(ticker, qty, stop_loss=stop, take_profit=tp):
@@ -199,6 +198,9 @@ def main() -> None:
     logger.info(f"ETF interval: every {RUN_INTERVAL_MINUTES} min (market hours only)")
     logger.info("Crypto: real-time WebSocket stream (1-min bars, 24/7)")
     logger.info("Type CTRL+C to stop.\n")
+
+    # --- Performance summary from previous session ---
+    print_stats()
 
     # --- Start crypto live trader in a background thread ---
     live = LiveCryptoTrader(trader)
