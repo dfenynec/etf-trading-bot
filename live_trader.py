@@ -29,7 +29,7 @@ from alpaca.data.live import CryptoDataStream
 from config import (
     ALPACA_API_KEY, ALPACA_SECRET_KEY,
     MAX_CRYPTO_POSITIONS,
-    DAILY_LOSS_LIMIT_PCT, BREAKEVEN_ATR_TRIGGER,
+    DAILY_LOSS_LIMIT_PCT, TRAILING_STOP_PCT,
     BTC_CORRELATION_FILTER, POSITION_CACHE_TTL,
 )
 from screener import CRYPTO_CANDIDATES, screen_crypto
@@ -219,62 +219,60 @@ class LiveCryptoTrader:
         return self._daily_halt
 
     # ------------------------------------------------------------------
-    # Manual stop / take-profit / breakeven (Alpaca disallows crypto brackets)
+    # Trailing stop (Alpaca disallows crypto bracket orders — managed in-process)
     # ------------------------------------------------------------------
 
     def _check_exit_conditions(self, alpaca_sym: str, symbol: str, price: float) -> bool:
         """
-        Check manual stop-loss, take-profit, and breakeven for a held position.
-        Returns True if the position was closed (caller should skip further logic).
-        Alpaca does not support bracket orders for crypto, so we manage all
-        exits in-process on every 1-min bar.
+        Trailing stop logic — fires on every 1-min bar for held positions.
+
+        How it works:
+          1. Track the highest price seen since entry (peak_price).
+          2. Trailing stop = peak_price × (1 - TRAILING_STOP_PCT).
+             It only ever moves UP — never down.
+          3. The effective stop is max(initial_stop, trailing_stop) so the
+             hard floor from entry is always respected too.
+          4. No fixed take-profit — the trail lets winners run as far as they go.
+
+        Returns True if the position was closed (caller skips buy/sell logic).
         """
         entry = self._entries.get(alpaca_sym)
         if not entry:
             return False
 
-        stop = entry["stop"]
-        tp   = entry["tp"]
+        # --- Update running peak ---
+        if price > entry["peak_price"]:
+            entry["peak_price"] = price
 
-        # --- Breakeven: move stop to entry once price advances 1x ATR ---
-        if not entry["breakeven_set"]:
-            trigger_price = entry["price"] + BREAKEVEN_ATR_TRIGGER * entry["atr"]
-            if price >= trigger_price:
-                entry["stop"]          = entry["price"]
-                entry["breakeven_set"] = True
-                logger.info(
-                    f"[LIVE] Breakeven: {symbol} stop moved to ${entry['price']:.4f} "
-                    f"(triggered @ ${price:.4f})"
-                )
+        # --- Calculate trailing stop (trails 3% below peak) ---
+        trailing_stop    = entry["peak_price"] * (1 - TRAILING_STOP_PCT)
+        effective_stop   = max(entry["stop"], trailing_stop)
+        gain_pct         = (entry["peak_price"] - entry["price"]) / entry["price"] * 100
 
-        # --- Stop-loss hit ---
-        if price <= stop:
+        # Log whenever trailing stop moves meaningfully above initial stop
+        if trailing_stop > entry["stop"] and not entry.get("trail_active"):
+            entry["trail_active"] = True
             logger.info(
-                f"[LIVE] *** STOP HIT {symbol} @ ${price:.4f} "
-                f"(stop was ${stop:.4f}) ***"
+                f"[LIVE] Trailing stop active: {symbol} peak=${entry['peak_price']:.4f} "
+                f"(+{gain_pct:.1f}%) → trail stop=${trailing_stop:.4f}"
             )
+
+        # --- Exit if price drops below effective stop ---
+        if price <= effective_stop:
             pnl_pct = (price - entry["price"]) / entry["price"] * 100
+            reason  = "Trail stop" if trailing_stop > entry["stop"] else "Initial stop"
+            logger.info(
+                f"[LIVE] *** {reason.upper()} HIT {symbol} @ ${price:.4f} "
+                f"(stop=${effective_stop:.4f} | peak=${entry['peak_price']:.4f} | "
+                f"pnl={pnl_pct:+.2f}%) ***"
+            )
             if self.trader.sell_crypto(alpaca_sym):
                 self._entries.pop(alpaca_sym, None)
                 self._last_traded[alpaca_sym] = time.time()
                 self._invalidate_pos_cache()
                 log_trade("CLOSE", symbol, 0, price, 0,
-                          note=f"SL hit | entry=${entry['price']:.4f} | pnl={pnl_pct:+.2f}%")
-            return True
-
-        # --- Take-profit hit ---
-        if price >= tp:
-            logger.info(
-                f"[LIVE] *** TP HIT {symbol} @ ${price:.4f} "
-                f"(target was ${tp:.4f}) ***"
-            )
-            pnl_pct = (price - entry["price"]) / entry["price"] * 100
-            if self.trader.sell_crypto(alpaca_sym):
-                self._entries.pop(alpaca_sym, None)
-                self._last_traded[alpaca_sym] = time.time()
-                self._invalidate_pos_cache()
-                log_trade("CLOSE", symbol, 0, price, 0,
-                          note=f"TP hit | entry=${entry['price']:.4f} | pnl={pnl_pct:+.2f}%")
+                          note=f"{reason} | entry=${entry['price']:.4f} | "
+                               f"peak=${entry['peak_price']:.4f} | pnl={pnl_pct:+.2f}%")
             return True
 
         return False
@@ -365,8 +363,9 @@ class LiveCryptoTrader:
                 self._last_traded[alpaca_sym] = time.time()
                 self._entries[alpaca_sym]     = {
                     "price": price, "atr": atr,
-                    "stop": stop, "tp": tp,
-                    "breakeven_set": False,
+                    "stop": stop,           # initial hard floor (entry - 2×ATR, max -4%)
+                    "peak_price": price,    # tracks highest price seen since entry
+                    "trail_active": False,  # flips True once trail exceeds initial stop
                 }
                 self._invalidate_pos_cache()
                 log_trade("BUY", symbol, qty, price, signal["score"], stop, tp)

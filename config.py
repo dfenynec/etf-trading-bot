@@ -53,7 +53,13 @@ CRYPTO_RUN_INTERVAL_MINUTES = 30  # Check crypto every 30 minutes
 
 # --- Risk circuit breakers ---
 DAILY_LOSS_LIMIT_PCT  = 0.03  # Halt all new trades if daily P&L drops below -3%
-BREAKEVEN_ATR_TRIGGER = 1.0   # Move stop to entry when profit >= 1x ATR (lock in breakeven)
+
+# --- Trailing stop ---
+# Once a position is open, the stop trails TRAILING_STOP_PCT below the highest
+# price seen since entry.  It only moves UP — never down.
+# Example: entry $82, price runs to $92 → trailing stop = $92 × (1 - 0.03) = $89.24
+# If price then drops to $89.24 the position closes, locking in +$7.24 per unit.
+TRAILING_STOP_PCT = 0.03      # Trail stop 3% below the running peak price
 
 # --- Regime detection thresholds ---
 ADX_RANGING_THRESHOLD  = 20   # ADX below this = ranging/choppy → mean-reversion mode
