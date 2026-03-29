@@ -149,12 +149,24 @@ class LiveCryptoTrader:
         """
         Inject real-time 1-min bar into the cached daily data.
         Updates close AND expands high/low so ATR reflects intraday range.
+
+        Safety: only update if the bar falls on the same day as the last row.
+        If midnight has passed and yfinance hasn't refreshed yet, skip the
+        update to avoid corrupting yesterday's row with today's prices.
         """
         with self._lock:
             df = self._base_data.get(symbol)
             if df is None or df.empty:
                 return
+
             idx = df.index[-1]
+            bar_date  = bar.timestamp.date() if hasattr(bar, 'timestamp') else None
+            row_date  = idx.date() if hasattr(idx, 'date') else None
+
+            # Skip if the day rolled over — wait for the next yfinance refresh
+            if bar_date and row_date and bar_date != row_date:
+                return
+
             self._base_data[symbol].at[idx, "close"] = float(bar.close)
             if float(bar.high) > self._base_data[symbol].at[idx, "high"]:
                 self._base_data[symbol].at[idx, "high"] = float(bar.high)
