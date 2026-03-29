@@ -78,6 +78,7 @@ def calculate_crypto_position_size(
     price: float,
     stop_price: float,
     buying_power: float,
+    risk_pct: float = None,
 ) -> float:
     """
     Size a crypto position using the 1% risk rule with fractional units.
@@ -87,11 +88,13 @@ def calculate_crypto_position_size(
         price:           Current crypto price
         stop_price:      Stop-loss price
         buying_power:    Available cash (hard ceiling, with safety buffer applied by caller)
+        risk_pct:        Override risk fraction (Kelly-adjusted). Defaults to RISK_PER_TRADE_PCT.
 
     Returns:
         Float quantity (up to 6 decimal places), floored to avoid overspend.
     """
-    risk_dollars  = portfolio_value * RISK_PER_TRADE_PCT
+    effective_risk = risk_pct if risk_pct is not None else RISK_PER_TRADE_PCT
+    risk_dollars  = portfolio_value * effective_risk
     stop_distance = abs(price - stop_price)
 
     if stop_distance <= 0:

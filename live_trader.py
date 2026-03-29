@@ -31,6 +31,8 @@ from config import (
     MAX_CRYPTO_POSITIONS,
     DAILY_LOSS_LIMIT_PCT, TRAILING_STOP_PCT,
     BTC_CORRELATION_FILTER, POSITION_CACHE_TTL,
+    PYRAMID_TRIGGER_PCT, PYRAMID_ADD_PCT,
+    LOSS_THROTTLE_AFTER, RISK_PER_TRADE_PCT,
 )
 from screener import CRYPTO_CANDIDATES, screen_crypto
 from data_fetcher import fetch_all_crypto
@@ -39,6 +41,7 @@ from strategy import score_etf
 from risk_manager import calculate_stop_loss, calculate_take_profit, calculate_crypto_position_size
 from trade_journal import log_trade
 from trader import AlpacaTrader
+from performance import kelly_risk_pct
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +79,14 @@ class LiveCryptoTrader:
         # Daily loss circuit breaker
         self._daily_halt      = False
         self._pnl_cache_time  = 0.0
+
+        # Kelly criterion — refreshed every hour from trade journal
+        self._kelly_risk_pct  = RISK_PER_TRADE_PCT
+        self._kelly_updated   = 0.0
+
+        # Consecutive loss protection
+        self._consecutive_losses = 0    # resets to 0 after a winning trade
+        self._loss_multiplier    = 1.0  # halved after LOSS_THROTTLE_AFTER losses
 
     # ------------------------------------------------------------------
     # Data management
@@ -219,20 +230,37 @@ class LiveCryptoTrader:
         return self._daily_halt
 
     # ------------------------------------------------------------------
-    # Trailing stop (Alpaca disallows crypto bracket orders — managed in-process)
+    # Kelly criterion — dynamic risk % updated hourly from trade journal
+    # ------------------------------------------------------------------
+
+    def _get_kelly_risk(self) -> float:
+        """
+        Return the Kelly-optimal risk fraction, refreshed every hour.
+        Falls back to RISK_PER_TRADE_PCT if fewer than KELLY_MIN_TRADES exist.
+        """
+        if time.time() - self._kelly_updated > 3600:
+            self._kelly_risk_pct = kelly_risk_pct()
+            self._kelly_updated  = time.time()
+        # Apply consecutive-loss multiplier on top of Kelly sizing
+        return self._kelly_risk_pct * self._loss_multiplier
+
+    # ------------------------------------------------------------------
+    # Trailing stop + pyramiding (Alpaca disallows crypto bracket orders)
     # ------------------------------------------------------------------
 
     def _check_exit_conditions(self, alpaca_sym: str, symbol: str, price: float) -> bool:
         """
-        Trailing stop logic — fires on every 1-min bar for held positions.
+        Trailing stop + pyramiding — fires on every 1-min bar for held positions.
 
-        How it works:
-          1. Track the highest price seen since entry (peak_price).
-          2. Trailing stop = peak_price × (1 - TRAILING_STOP_PCT).
-             It only ever moves UP — never down.
-          3. The effective stop is max(initial_stop, trailing_stop) so the
-             hard floor from entry is always respected too.
-          4. No fixed take-profit — the trail lets winners run as far as they go.
+        Exit logic:
+          1. Track peak_price since entry.
+          2. Trailing stop = peak_price × (1 - TRAILING_STOP_PCT) — only moves up.
+          3. Effective stop = max(initial_stop, trailing_stop).
+          4. Close when price ≤ effective_stop. Updates loss/win streak counter.
+
+        Pyramiding logic:
+          Once position is up PYRAMID_TRIGGER_PCT (3%), add PYRAMID_ADD_PCT (50%)
+          more units and move the initial stop to breakeven.  Done once per trade.
 
         Returns True if the position was closed (caller skips buy/sell logic).
         """
@@ -244,14 +272,33 @@ class LiveCryptoTrader:
         if price > entry["peak_price"]:
             entry["peak_price"] = price
 
-        # --- Calculate trailing stop (trails 3% below peak) ---
-        trailing_stop    = entry["peak_price"] * (1 - TRAILING_STOP_PCT)
-        effective_stop   = max(entry["stop"], trailing_stop)
-        gain_pct         = (entry["peak_price"] - entry["price"]) / entry["price"] * 100
+        # --- Pyramiding: add to winner once it's up PYRAMID_TRIGGER_PCT ---
+        if not entry.get("pyramided") and entry["orig_qty"] > 0:
+            gain_pct = (price - entry["price"]) / entry["price"]
+            if gain_pct >= PYRAMID_TRIGGER_PCT:
+                add_qty = math.floor(
+                    entry["orig_qty"] * PYRAMID_ADD_PCT * 1_000_000
+                ) / 1_000_000
+                if add_qty > 0:
+                    logger.info(
+                        f"[LIVE] *** PYRAMID {symbol} +{add_qty:.6f} units @ ${price:.4f} "
+                        f"(up {gain_pct*100:.1f}% from entry ${entry['price']:.4f}) ***"
+                    )
+                    if self.trader.buy_crypto(symbol, add_qty):
+                        entry["pyramided"] = True
+                        # Move initial stop to original entry (breakeven on base position)
+                        entry["stop"] = entry["price"]
+                        log_trade("BUY", symbol, add_qty, price, 0,
+                                  note=f"Pyramid add | base_entry=${entry['price']:.4f}")
 
-        # Log whenever trailing stop moves meaningfully above initial stop
+        # --- Calculate trailing stop (trails TRAILING_STOP_PCT below peak) ---
+        trailing_stop  = entry["peak_price"] * (1 - TRAILING_STOP_PCT)
+        effective_stop = max(entry["stop"], trailing_stop)
+
+        # Log when trail activates (first time it exceeds the initial floor)
         if trailing_stop > entry["stop"] and not entry.get("trail_active"):
             entry["trail_active"] = True
+            gain_pct = (entry["peak_price"] - entry["price"]) / entry["price"] * 100
             logger.info(
                 f"[LIVE] Trailing stop active: {symbol} peak=${entry['peak_price']:.4f} "
                 f"(+{gain_pct:.1f}%) → trail stop=${trailing_stop:.4f}"
@@ -273,6 +320,20 @@ class LiveCryptoTrader:
                 log_trade("CLOSE", symbol, 0, price, 0,
                           note=f"{reason} | entry=${entry['price']:.4f} | "
                                f"peak=${entry['peak_price']:.4f} | pnl={pnl_pct:+.2f}%")
+
+                # --- Update consecutive loss streak ---
+                if pnl_pct > 0:
+                    self._consecutive_losses = 0
+                    self._loss_multiplier    = 1.0
+                    logger.info(f"[KELLY] Win recorded — full position sizing restored")
+                else:
+                    self._consecutive_losses += 1
+                    if self._consecutive_losses >= LOSS_THROTTLE_AFTER:
+                        self._loss_multiplier = 0.5
+                        logger.warning(
+                            f"[KELLY] {self._consecutive_losses} consecutive losses — "
+                            f"position size halved until next win"
+                        )
             return True
 
         return False
@@ -347,8 +408,13 @@ class LiveCryptoTrader:
             crypto_bp       = self.trader.get_crypto_buying_power()
             stop = calculate_stop_loss(price, atr)
             tp   = calculate_take_profit(price, atr)
-            qty  = calculate_crypto_position_size(
-                portfolio_value, price, stop, buying_power=crypto_bp * 0.98
+
+            # Kelly-adjusted risk % (halved after consecutive losses)
+            risk_pct = self._get_kelly_risk()
+            qty = calculate_crypto_position_size(
+                portfolio_value, price, stop,
+                buying_power=crypto_bp * 0.98,
+                risk_pct=risk_pct,
             )
 
             if qty <= 0:
@@ -357,7 +423,8 @@ class LiveCryptoTrader:
 
             logger.info(
                 f"[LIVE] *** BUY  {symbol} | {qty:.6f} @ ${price:.4f} "
-                f"| Stop: ${stop} | Target: ${tp} | Score: {signal['score']} ***"
+                f"| Stop: ${stop} | Score: {signal['score']} "
+                f"| Risk: {risk_pct*100:.2f}% ***"
             )
             if self.trader.buy_crypto(symbol, qty, stop_loss=stop, take_profit=tp):
                 self._last_traded[alpaca_sym] = time.time()
@@ -365,6 +432,8 @@ class LiveCryptoTrader:
                     "price": price, "atr": atr,
                     "stop": stop,           # initial hard floor (entry - 2×ATR, max -4%)
                     "peak_price": price,    # tracks highest price seen since entry
+                    "orig_qty": qty,        # used to size the pyramid add-on
+                    "pyramided": False,     # True after pyramid add executed
                     "trail_active": False,  # flips True once trail exceeds initial stop
                 }
                 self._invalidate_pos_cache()

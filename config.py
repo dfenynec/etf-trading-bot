@@ -61,6 +61,27 @@ DAILY_LOSS_LIMIT_PCT  = 0.03  # Halt all new trades if daily P&L drops below -3%
 # If price then drops to $89.24 the position closes, locking in +$7.24 per unit.
 TRAILING_STOP_PCT = 0.03      # Trail stop 3% below the running peak price
 
+# --- Pyramiding (scaling into winners) ---
+# When a position gains PYRAMID_TRIGGER_PCT, add PYRAMID_ADD_PCT of the original
+# qty to the position.  The stop is moved to the original entry price (breakeven)
+# so the add-on is free-rolled on top of a protected base.  Only done once per trade.
+PYRAMID_TRIGGER_PCT = 0.03    # Add to position once it's up 3%
+PYRAMID_ADD_PCT     = 0.50    # Add 50% of the original quantity
+
+# --- Kelly Criterion (dynamic risk sizing) ---
+# Uses win rate + avg win/loss from trade_journal.csv to size each trade
+# for maximum geometric (compounding) growth.
+# Falls back to RISK_PER_TRADE_PCT if fewer than KELLY_MIN_TRADES are recorded.
+KELLY_MIN_TRADES  = 10        # Minimum closed trades before Kelly activates
+KELLY_MIN_RISK    = 0.005     # Never risk less than 0.5% per trade
+KELLY_MAX_RISK    = 0.02      # Never risk more than 2% per trade
+KELLY_FRACTION    = 0.5       # Use half-Kelly (safer — full Kelly is too aggressive)
+
+# --- Consecutive loss protection ---
+# After LOSS_THROTTLE_AFTER consecutive losses, position size is halved.
+# Resets to full size after the next winning trade.
+LOSS_THROTTLE_AFTER = 2       # Halve size after this many consecutive losses
+
 # --- Regime detection thresholds ---
 ADX_RANGING_THRESHOLD  = 20   # ADX below this = ranging/choppy → mean-reversion mode
 ADX_TRENDING_THRESHOLD = 25   # ADX above this = clearly trending → trend-following mode

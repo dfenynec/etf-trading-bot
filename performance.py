@@ -113,6 +113,47 @@ def print_stats() -> None:
     logger.info("=" * 55)
 
 
+def kelly_risk_pct() -> float:
+    """
+    Calculate the optimal risk % per trade using the Kelly Criterion.
+
+    Kelly formula:  f* = p - (1-p) / b
+      p = win rate (probability of a winning trade)
+      b = avg_win / abs(avg_loss)  (payoff ratio)
+
+    We use half-Kelly (f* × KELLY_FRACTION) to reduce volatility.
+    Returns RISK_PER_TRADE_PCT if there are fewer than KELLY_MIN_TRADES.
+
+    This is the mathematical formula for maximising geometric / compounding growth.
+    """
+    from config import (
+        RISK_PER_TRADE_PCT, KELLY_MIN_TRADES,
+        KELLY_MIN_RISK, KELLY_MAX_RISK, KELLY_FRACTION,
+    )
+
+    stats = get_stats()
+    if "error" in stats or stats.get("completed", 0) < KELLY_MIN_TRADES:
+        return RISK_PER_TRADE_PCT   # Not enough data — use default
+
+    win_rate = stats["win_rate"] / 100
+    avg_win  = stats["avg_win_pct"]
+    avg_loss = abs(stats["avg_loss_pct"])
+
+    if avg_loss == 0 or avg_win == 0:
+        return RISK_PER_TRADE_PCT
+
+    b      = avg_win / avg_loss                  # payoff ratio
+    kelly  = win_rate - (1 - win_rate) / b       # full Kelly fraction
+    result = kelly * KELLY_FRACTION              # half-Kelly
+
+    clamped = max(KELLY_MIN_RISK, min(KELLY_MAX_RISK, result))
+    logger.info(
+        f"[KELLY] win={win_rate*100:.1f}%  b={b:.2f}  "
+        f"full={kelly*100:.2f}%  half={result*100:.2f}%  → using {clamped*100:.2f}%"
+    )
+    return clamped
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     print_stats()
