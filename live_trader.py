@@ -19,7 +19,9 @@ Flow per bar:
   6. Trade on signal if all checks pass
   7. Refresh base data from yfinance every 30 min in background
 """
+import json
 import math
+import os
 import threading
 import time
 import logging
@@ -49,6 +51,7 @@ logger = logging.getLogger(__name__)
 FULL_REFRESH_INTERVAL = 1800   # Refresh yfinance daily data every 30 min
 TRADE_COOLDOWN        = 300    # Min seconds between trades on same symbol
 PNL_CHECK_INTERVAL    = 300    # Re-check daily P&L every 5 min
+ENTRIES_FILE          = "open_entries.json"  # Persists stop/trail data across redeploys
 
 _ALL_CANDIDATE_SYMS  = set(CRYPTO_CANDIDATES)
 _ALPACA_CRYPTO_SYMS  = {s.replace("/", "") for s in _ALL_CANDIDATE_SYMS}
@@ -70,8 +73,9 @@ class LiveCryptoTrader:
         # Trade timing
         self._last_traded: dict = {}    # alpaca_sym → last trade timestamp
 
-        # Breakeven tracking: alpaca_sym → {price, atr, breakeven_set}
-        self._entries: dict = {}
+        # Entry tracking: alpaca_sym → {price, atr, stop, peak_price, ...}
+        # Persisted to ENTRIES_FILE so stops survive redeploys
+        self._entries: dict = self._load_entries()
 
         # Position cache
         self._pos_cache      = {}
@@ -88,6 +92,35 @@ class LiveCryptoTrader:
         # Consecutive loss protection
         self._consecutive_losses = 0    # resets to 0 after a winning trade
         self._loss_multiplier    = 1.0  # halved after LOSS_THROTTLE_AFTER losses
+
+    # ------------------------------------------------------------------
+    # Entry persistence — stops survive redeploys
+    # ------------------------------------------------------------------
+
+    def _load_entries(self) -> dict:
+        """Load open position entries from disk. Returns empty dict if file missing."""
+        if not os.path.exists(ENTRIES_FILE):
+            return {}
+        try:
+            with open(ENTRIES_FILE) as f:
+                entries = json.load(f)
+            if entries:
+                logger.info(
+                    f"[LIVE] Restored {len(entries)} open entries from disk: "
+                    f"{list(entries.keys())}"
+                )
+            return entries
+        except Exception as e:
+            logger.error(f"[LIVE] Failed to load entries: {e}")
+            return {}
+
+    def _save_entries(self) -> None:
+        """Persist current entries to disk. Called after every open/close."""
+        try:
+            with open(ENTRIES_FILE, "w") as f:
+                json.dump(self._entries, f, indent=2)
+        except Exception as e:
+            logger.error(f"[LIVE] Failed to save entries: {e}")
 
     # ------------------------------------------------------------------
     # Data management
@@ -204,6 +237,7 @@ class LiveCryptoTrader:
                 "CLOSE", slash_sym, 0, exit_price, 0,
                 note=f"{result} | entry=${entry['price']:.4f} | pnl={pnl_pct:+.2f}%",
             )
+            self._save_entries()
 
     # ------------------------------------------------------------------
     # Daily loss circuit breaker
@@ -289,6 +323,7 @@ class LiveCryptoTrader:
                         entry["pyramided"] = True
                         # Move initial stop to original entry (breakeven on base position)
                         entry["stop"] = entry["price"]
+                        self._save_entries()
                         log_trade("BUY", symbol, add_qty, price, 0,
                                   note=f"Pyramid add | base_entry=${entry['price']:.4f}")
 
@@ -335,6 +370,7 @@ class LiveCryptoTrader:
                             f"[KELLY] {self._consecutive_losses} consecutive losses — "
                             f"position size halved until next win"
                         )
+                self._save_entries()
             return True
 
         return False
@@ -443,6 +479,7 @@ class LiveCryptoTrader:
                     "trail_active": False,  # flips True once trail exceeds initial stop
                 }
                 self._invalidate_pos_cache()
+                self._save_entries()
                 # Log reasons so the learner can trace which indicators fired
                 reasons_str = " | ".join(signal.get("reasons", [])[:5])
                 log_trade("BUY", symbol, qty, price, signal["score"], stop, tp,
@@ -455,6 +492,7 @@ class LiveCryptoTrader:
                 self._last_traded[alpaca_sym] = time.time()
                 self._entries.pop(alpaca_sym, None)
                 self._invalidate_pos_cache()
+                self._save_entries()
                 log_trade("SELL", symbol, 0, price, signal["score"], note="Signal exit")
 
     # ------------------------------------------------------------------

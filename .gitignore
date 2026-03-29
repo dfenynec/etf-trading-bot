@@ -4,3 +4,4 @@ __pycache__/
 *.pyc
 bot.log
 learned_weights.json
+open_entries.json
