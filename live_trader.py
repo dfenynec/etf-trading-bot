@@ -201,8 +201,8 @@ class LiveCryptoTrader:
     def _reconcile_closed_positions(self, positions: dict) -> None:
         """
         Compare _entries (positions we opened) against current live positions.
-        Any symbol in _entries that is no longer in positions was closed by
-        Alpaca (stop-loss or take-profit bracket order hit).
+        Any symbol in _entries that is no longer in positions was closed
+        externally (e.g. manually on Alpaca dashboard, or during a restart).
         Cleans up stale _entries and logs the close to the trade journal.
         """
         for alpaca_sym in list(self._entries.keys()):
@@ -314,7 +314,9 @@ class LiveCryptoTrader:
                 add_qty = math.floor(
                     entry["orig_qty"] * PYRAMID_ADD_PCT * 1_000_000
                 ) / 1_000_000
-                if add_qty > 0:
+                add_cost = add_qty * price
+                crypto_bp = self.trader.get_crypto_buying_power()
+                if add_qty > 0 and add_cost < crypto_bp * 0.95:
                     logger.info(
                         f"[LIVE] *** PYRAMID {symbol} +{add_qty:.6f} units @ ${price:.4f} "
                         f"(up {gain_pct*100:.1f}% from entry ${entry['price']:.4f}) ***"

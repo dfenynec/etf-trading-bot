@@ -126,35 +126,35 @@ def _score_breakout(latest, prev, vol_ratio: float, resistance: float) -> tuple:
 
     Max: +6, entry threshold: +2
     """
-    score   = 2   # The breakout itself
+    score   = _w("breakout", 2)  # The breakout itself (weighted)
     reasons = [f"Breakout above resistance ${resistance:.4f} (+2)"]
 
     # Volume strength
     if vol_ratio >= 2.0:
-        score += 2
+        score += _w("volume", 2)
         reasons.append(f"Volume surge {vol_ratio:.1f}x avg — strong conviction (+2)")
     elif vol_ratio >= 1.5:
-        score += 1
+        score += _w("volume", 1)
         reasons.append(f"Volume spike {vol_ratio:.1f}x avg (+1)")
     else:
-        reasons.append(f"Volume {vol_ratio:.1f}x avg — moderate (+0)")
+        reasons.append(f"Volume {vol_ratio:.1f}x avg ��� moderate (+0)")
 
     # MACD confirmation
     if latest["macd"] > latest["macd_signal"]:
-        score += 1
+        score += _w("macd", 1)
         reasons.append("MACD bullish (+1)")
     else:
         reasons.append("MACD bearish (+0)")
 
     # RSI filter (overbought breakouts often fail immediately)
     if latest["rsi"] < 70:
-        score += 1
+        score += _w("rsi", 1)
         reasons.append(f"RSI not overbought ({latest['rsi']:.1f}) (+1)")
     else:
-        score -= 1
+        score += _w("rsi", -1)
         reasons.append(f"RSI overbought ({latest['rsi']:.1f}) — risk of reversal (-1)")
 
-    return score, reasons
+    return round(score), reasons
 
 
 def _detect_regime(adx: float) -> str:
