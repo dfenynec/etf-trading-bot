@@ -203,6 +203,72 @@ def delete_entry(alpaca_sym: str) -> bool:
         return False
 
 
+def save_weights(weights: dict) -> bool:
+    """Upsert learned weights into DB (single persistent row)."""
+    conn = get_conn()
+    if not conn:
+        return False
+    try:
+        import json as _json
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS learned_weights (
+                    id          INT PRIMARY KEY DEFAULT 1,
+                    weights     TEXT,
+                    updated_at  TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            cur.execute("""
+                INSERT INTO learned_weights (id, weights, updated_at)
+                VALUES (1, %s, NOW())
+                ON CONFLICT (id) DO UPDATE SET
+                    weights    = EXCLUDED.weights,
+                    updated_at = NOW()
+            """, (_json.dumps(weights),))
+        return True
+    except Exception as e:
+        logger.error(f"[DB] save_weights failed: {e}")
+        return False
+
+
+def load_weights() -> dict:
+    """Load learned weights from DB. Returns {} if not found."""
+    conn = get_conn()
+    if not conn:
+        return {}
+    try:
+        import json as _json
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT weights FROM learned_weights WHERE id = 1
+            """)
+            row = cur.fetchone()
+            if row:
+                return _json.loads(row[0])
+        return {}
+    except Exception as e:
+        logger.error(f"[DB] load_weights failed: {e}")
+        return {}
+
+
+def get_all_trades() -> list:
+    """Return all trades from DB for learner analysis (no limit)."""
+    conn = get_conn()
+    if not conn:
+        return []
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT ts, action, symbol, qty, price, score, note, pnl_pct
+                FROM trades ORDER BY ts ASC
+            """)
+            cols = ["timestamp", "action", "symbol", "qty", "price", "score", "note", "pnl_pct"]
+            return [dict(zip(cols, row)) for row in cur.fetchall()]
+    except Exception as e:
+        logger.error(f"[DB] get_all_trades failed: {e}")
+        return []
+
+
 def load_all_entries() -> dict:
     """Load all open entries from DB. Returns {} if DB unavailable."""
     conn = get_conn()

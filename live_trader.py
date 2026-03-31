@@ -495,6 +495,17 @@ class LiveCryptoTrader:
                 logger.info(f"[LIVE] Skip {symbol}: blacklisted by learner (poor win rate)")
                 return
 
+            # Time-of-day filter — skip statistically bad hours (learned from history)
+            from learner import get_weights as _get_weights
+            _bad_hours = _get_weights().get("bad_hours_utc", [])
+            _current_hour = time.gmtime().tm_hour
+            if _current_hour in _bad_hours:
+                logger.info(
+                    f"[LIVE] Skip {symbol}: UTC hour {_current_hour:02d}:00 "
+                    f"flagged as low win-rate by learner"
+                )
+                return
+
             # BTC correlation filter — don't buy altcoins in a BTC downtrend
             if BTC_CORRELATION_FILTER and symbol != "BTC/USD":
                 btc_sig = self._get_btc_signal()

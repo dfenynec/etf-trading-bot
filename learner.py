@@ -12,7 +12,8 @@ Three learning systems:
 All learning is gradual and capped to prevent overfitting on small samples.
 Requires a minimum number of observations before adjusting any parameter.
 
-Data source: trade_journal.csv (the bot's own trade history)
+Data source: PostgreSQL trades table (primary), trade_journal.csv (fallback)
+Learned weights persisted to DB so they survive restarts.
 """
 import csv
 import json
@@ -109,7 +110,12 @@ def _parse_pnl(note: str) -> float | None:
 # ---------------------------------------------------------------------------
 
 def _read_journal() -> list[dict]:
-    """Read all rows from trade_journal.csv."""
+    """Read all trades from DB (primary) or CSV fallback."""
+    import db as _db
+    rows = _db.get_all_trades()
+    if rows:
+        return rows
+    # CSV fallback
     if not os.path.exists(JOURNAL_FILE):
         return []
     rows = []
@@ -118,7 +124,7 @@ def _read_journal() -> list[dict]:
             for row in csv.DictReader(f):
                 rows.append(row)
     except Exception as e:
-        logger.error(f"[LEARNER] Failed to read journal: {e}")
+        logger.error(f"[LEARNER] Failed to read CSV journal: {e}")
     return rows
 
 
@@ -257,22 +263,57 @@ def analyze() -> dict:
                 f"{stats['total_pnl']:+.2f}% total P&L over {total} trades"
             )
 
+    # ---- 4. Time-of-day analysis (crypto only) ----
+    # Track win rate by hour UTC. Hours with <35% win rate (min 3 trades) are flagged.
+    hour_stats: dict = {}  # hour → {"wins": int, "losses": int}
+    for trade in trades:
+        ts_str = trade.get("timestamp") or trade.get("ts", "")
+        try:
+            ts_str = str(ts_str)
+            # Extract hour from "2026-03-30 02:20:00" or datetime object
+            hour = int(ts_str[11:13]) if len(ts_str) >= 13 else None
+        except Exception:
+            hour = None
+        if hour is None:
+            continue
+        if hour not in hour_stats:
+            hour_stats[hour] = {"wins": 0, "losses": 0}
+        if trade["won"]:
+            hour_stats[hour]["wins"] += 1
+        else:
+            hour_stats[hour]["losses"] += 1
+
+    bad_hours = []
+    for hour, stats in hour_stats.items():
+        total = stats["wins"] + stats["losses"]
+        if total >= 3:
+            win_rate = stats["wins"] / total
+            if win_rate < 0.35:
+                bad_hours.append(hour)
+                logger.info(
+                    f"[LEARNER] Flagged bad hour UTC {hour:02d}:00 — "
+                    f"{win_rate*100:.0f}% win rate over {total} trades"
+                )
+
     result = {
         "indicator_weights": indicator_weights,
         "regime_weights":    regime_weights,
         "symbol_blacklist":  blacklist,
+        "bad_hours_utc":     bad_hours,
         "meta": {
             "total_trades_analyzed": len(trades),
             "last_updated": time.time(),
         }
     }
 
-    # Persist to disk so it survives restarts
+    # Persist to DB (primary) and JSON file (fallback)
+    import db as _db
+    _db.save_weights(result)
     try:
         with open(WEIGHTS_FILE, "w") as f:
             json.dump(result, f, indent=2)
     except Exception as e:
-        logger.error(f"[LEARNER] Failed to save weights: {e}")
+        logger.error(f"[LEARNER] Failed to save weights JSON: {e}")
 
     return result
 
@@ -289,12 +330,25 @@ REFRESH_INTERVAL = 1800  # Re-analyze every 30 min
 def get_weights() -> dict:
     """
     Return current learned weights, refreshed every 30 min.
-    Thread-safe (worst case: two threads both call analyze() — same result).
+    On first call, loads from DB so previous learning survives restarts.
     """
     global _cached_weights, _cache_time
 
     if _cached_weights and time.time() - _cache_time < REFRESH_INTERVAL:
         return _cached_weights
+
+    # First call: try loading persisted weights from DB before re-analyzing
+    if _cached_weights is None:
+        import db as _db
+        persisted = _db.load_weights()
+        if persisted and persisted.get("meta", {}).get("total_trades_analyzed", 0) > 0:
+            logger.info(
+                f"[LEARNER] Loaded weights from DB "
+                f"({persisted['meta']['total_trades_analyzed']} trades analyzed)"
+            )
+            _cached_weights = persisted
+            _cache_time     = time.time()
+            return _cached_weights
 
     _cached_weights = analyze()
     _cache_time     = time.time()
