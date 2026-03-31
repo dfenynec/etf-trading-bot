@@ -14,7 +14,15 @@ from datetime import datetime
 from flask import Flask
 
 from performance import get_stats
-from config import TRAILING_STOP_PCT
+from config import (
+    TRAILING_STOP_PCT, RISK_PER_TRADE_PCT, STOP_LOSS_MAX_PCT, TAKE_PROFIT_MAX_PCT,
+    DAILY_LOSS_LIMIT_PCT, MAX_POSITIONS, MAX_SHORT_POSITIONS, MAX_CRYPTO_POSITIONS,
+    MIN_BUY_SCORE, MIN_SELL_SCORE, SCREEN_TOP_N_ETF, SCREEN_TOP_N_CRYPTO,
+    RUN_INTERVAL_MINUTES, BTC_CORRELATION_FILTER,
+    PYRAMID_TRIGGER_PCT, PYRAMID_ADD_PCT,
+    KELLY_MIN_TRADES, KELLY_MAX_RISK, KELLY_FRACTION,
+)
+from screener import ETF_CANDIDATES, CRYPTO_CANDIDATES
 import db
 
 logger = logging.getLogger(__name__)
@@ -157,6 +165,44 @@ def _bot_status() -> dict:
     }
 
 
+def _config_info() -> dict:
+    """Snapshot of all key config parameters — displayed in the dashboard deploy section."""
+    from live_trader import TRADE_COOLDOWN, FULL_REFRESH_INTERVAL
+    kelly_risk = None
+    try:
+        from performance import kelly_risk_pct
+        kelly_risk = kelly_risk_pct()
+    except Exception:
+        pass
+    return {
+        # Risk
+        "risk_per_trade":    f"{RISK_PER_TRADE_PCT*100:.1f}%",
+        "kelly_risk":        f"{kelly_risk*100:.2f}% (active)" if kelly_risk and kelly_risk != RISK_PER_TRADE_PCT else f"{RISK_PER_TRADE_PCT*100:.1f}% (base — Kelly pending {KELLY_MIN_TRADES} trades)",
+        "max_stop":          f"{STOP_LOSS_MAX_PCT*100:.0f}%",
+        "max_tp":            f"{TAKE_PROFIT_MAX_PCT*100:.0f}%",
+        "trailing_stop":     f"{TRAILING_STOP_PCT*100:.0f}%",
+        "daily_loss_limit":  f"{DAILY_LOSS_LIMIT_PCT*100:.0f}%",
+        # Positions
+        "max_long_etf":      MAX_POSITIONS,
+        "max_short_etf":     MAX_SHORT_POSITIONS,
+        "max_crypto":        MAX_CRYPTO_POSITIONS,
+        # Signals
+        "buy_threshold":     f"≥ +{MIN_BUY_SCORE}",
+        "sell_threshold":    f"≤ {MIN_SELL_SCORE}",
+        # Universe
+        "etf_pool":          f"{len(ETF_CANDIDATES)} candidates → top {SCREEN_TOP_N_ETF} active",
+        "crypto_pool":       f"{len(CRYPTO_CANDIDATES)} candidates → top {SCREEN_TOP_N_CRYPTO} active",
+        # Timing
+        "etf_interval":      f"every {RUN_INTERVAL_MINUTES} min (market + ext hours)",
+        "crypto_cooldown":   f"{TRADE_COOLDOWN}s between trades per symbol",
+        "data_refresh":      f"every {FULL_REFRESH_INTERVAL//60} min",
+        # Features
+        "btc_filter":        "ON" if BTC_CORRELATION_FILTER else "OFF",
+        "pyramid":           f"ON — adds {int(PYRAMID_ADD_PCT*100)}% at +{int(PYRAMID_TRIGGER_PCT*100)}%",
+        "kelly_fraction":    f"{int(KELLY_FRACTION*100)}% Kelly (activates after {KELLY_MIN_TRADES} trades, max {KELLY_MAX_RISK*100:.0f}%)",
+    }
+
+
 def _color(val: float, positive="green", negative="red") -> str:
     return positive if val >= 0 else negative
 
@@ -174,6 +220,7 @@ def index():
     trades   = _recent_trades()
     stats    = get_stats()
     status   = _bot_status()
+    cfg      = _config_info()
 
     # ---- Build HTML ----
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -435,6 +482,56 @@ def index():
             <div class="status-label">Active Crypto</div>
             <div class="active-syms">{active_syms}</div>
         </div>
+    </div>
+
+    <h2>Bot Configuration</h2>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px">
+
+        <div style="background:#161b22;border:1px solid #21262d;border-radius:8px;padding:14px">
+            <div style="color:#8b949e;font-size:11px;text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">⚖️ Risk Management</div>
+            <table style="background:transparent;font-size:13px">
+                <tr><td style="color:#8b949e;padding:3px 12px 3px 0">Risk/trade</td><td style="color:#e6edf3"><b>{cfg["risk_per_trade"]}</b></td></tr>
+                <tr><td style="color:#8b949e;padding:3px 12px 3px 0">Kelly sizing</td><td style="color:#58a6ff">{cfg["kelly_risk"]}</td></tr>
+                <tr><td style="color:#8b949e;padding:3px 12px 3px 0">Max stop-loss</td><td style="color:#e74c3c">{cfg["max_stop"]}</td></tr>
+                <tr><td style="color:#8b949e;padding:3px 12px 3px 0">Max take-profit</td><td style="color:#2ecc71">{cfg["max_tp"]}</td></tr>
+                <tr><td style="color:#8b949e;padding:3px 12px 3px 0">Trailing stop</td><td style="color:#e6edf3">{cfg["trailing_stop"]}</td></tr>
+                <tr><td style="color:#8b949e;padding:3px 12px 3px 0">Daily halt</td><td style="color:#e74c3c">{cfg["daily_loss_limit"]}</td></tr>
+            </table>
+        </div>
+
+        <div style="background:#161b22;border:1px solid #21262d;border-radius:8px;padding:14px">
+            <div style="color:#8b949e;font-size:11px;text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">📊 Positions &amp; Signals</div>
+            <table style="background:transparent;font-size:13px">
+                <tr><td style="color:#8b949e;padding:3px 12px 3px 0">Max ETF longs</td><td style="color:#e6edf3"><b>{cfg["max_long_etf"]}</b></td></tr>
+                <tr><td style="color:#8b949e;padding:3px 12px 3px 0">Max ETF shorts</td><td style="color:#e6edf3"><b>{cfg["max_short_etf"]}</b></td></tr>
+                <tr><td style="color:#8b949e;padding:3px 12px 3px 0">Max crypto</td><td style="color:#e6edf3"><b>{cfg["max_crypto"]}</b></td></tr>
+                <tr><td style="color:#8b949e;padding:3px 12px 3px 0">Buy threshold</td><td style="color:#2ecc71">{cfg["buy_threshold"]}</td></tr>
+                <tr><td style="color:#8b949e;padding:3px 12px 3px 0">Sell threshold</td><td style="color:#e74c3c">{cfg["sell_threshold"]}</td></tr>
+            </table>
+        </div>
+
+        <div style="background:#161b22;border:1px solid #21262d;border-radius:8px;padding:14px">
+            <div style="color:#8b949e;font-size:11px;text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">🌐 Universe &amp; Timing</div>
+            <table style="background:transparent;font-size:13px">
+                <tr><td style="color:#8b949e;padding:3px 12px 3px 0">ETF pool</td><td style="color:#e6edf3">{cfg["etf_pool"]}</td></tr>
+                <tr><td style="color:#8b949e;padding:3px 12px 3px 0">Crypto pool</td><td style="color:#e6edf3">{cfg["crypto_pool"]}</td></tr>
+                <tr><td style="color:#8b949e;padding:3px 12px 3px 0">ETF runs</td><td style="color:#e6edf3">{cfg["etf_interval"]}</td></tr>
+                <tr><td style="color:#8b949e;padding:3px 12px 3px 0">Crypto cooldown</td><td style="color:#e6edf3">{cfg["crypto_cooldown"]}</td></tr>
+                <tr><td style="color:#8b949e;padding:3px 12px 3px 0">Data refresh</td><td style="color:#e6edf3">{cfg["data_refresh"]}</td></tr>
+            </table>
+        </div>
+
+        <div style="background:#161b22;border:1px solid #21262d;border-radius:8px;padding:14px">
+            <div style="color:#8b949e;font-size:11px;text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">🤖 Features</div>
+            <table style="background:transparent;font-size:13px">
+                <tr><td style="color:#8b949e;padding:3px 12px 3px 0">BTC filter</td><td style="color:#58a6ff">{cfg["btc_filter"]}</td></tr>
+                <tr><td style="color:#8b949e;padding:3px 12px 3px 0">Pyramiding</td><td style="color:#2ecc71">{cfg["pyramid"]}</td></tr>
+                <tr><td style="color:#8b949e;padding:3px 12px 3px 0">Kelly criterion</td><td style="color:#e6edf3">{cfg["kelly_fraction"]}</td></tr>
+                <tr><td style="color:#8b949e;padding:3px 12px 3px 0">ETF shorts</td><td style="color:#2ecc71">ON (US equities only)</td></tr>
+                <tr><td style="color:#8b949e;padding:3px 12px 3px 0">Ext hours</td><td style="color:#2ecc71">ON (4AM–9:30AM / 4PM–8PM ET)</td></tr>
+            </table>
+        </div>
+
     </div>
 
     <h2>Open Positions ({len([p for p in positions if "error" not in p])})</h2>
