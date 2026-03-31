@@ -37,11 +37,11 @@ STOCH_PERIOD = 14
 MAX_POSITIONS = 5             # Max open long positions at once
 MAX_SHORT_POSITIONS = 3       # Max open short positions at once
 MAX_POSITION_PCT = 0.10       # Max 10% of portfolio per position (10% rule)
-STOP_LOSS_ATR_MULT = 2.0      # Stop-loss = entry - 2 * ATR
-TAKE_PROFIT_ATR_MULT = 3.0    # Take-profit = entry + 3 * ATR
+STOP_LOSS_ATR_MULT = 1.5      # Stop-loss = entry - 1.5 * ATR (tighter for faster turnover)
+TAKE_PROFIT_ATR_MULT = 2.0    # Take-profit = entry + 2 * ATR (achievable on 15m charts)
 # Percentage caps — prevent ATR from stretching stops/targets too far in volatile markets
-STOP_LOSS_MAX_PCT  = 0.04     # Stop never more than 4% below entry
-TAKE_PROFIT_MAX_PCT = 0.07    # Target never more than 7% above entry (achievable in calm markets)
+STOP_LOSS_MAX_PCT  = 0.025    # Stop never more than 2.5% below entry
+TAKE_PROFIT_MAX_PCT = 0.035   # Target never more than 3.5% above entry (realistic intra-day)
 RISK_PER_TRADE_PCT = 0.01     # Risk exactly 1% of portfolio per trade (position sized by stop distance)
 MIN_BUY_SCORE = 3             # Minimum score to trigger a BUY (lower TF = more signals, daily filter handles noise)
 MIN_SELL_SCORE = -3           # Maximum score to trigger a SELL
@@ -59,13 +59,13 @@ DAILY_LOSS_LIMIT_PCT  = 0.03  # Halt all new trades if daily P&L drops below -3%
 # price seen since entry.  It only moves UP — never down.
 # Example: entry $82, price runs to $92 → trailing stop = $92 × (1 - 0.03) = $89.24
 # If price then drops to $89.24 the position closes, locking in +$7.24 per unit.
-TRAILING_STOP_PCT = 0.03      # Trail stop 3% below the running peak price
+TRAILING_STOP_PCT = 0.02      # Trail stop 2% below the running peak price (tighter = faster locks)
 
 # --- Pyramiding (scaling into winners) ---
 # When a position gains PYRAMID_TRIGGER_PCT, add PYRAMID_ADD_PCT of the original
 # qty to the position.  The stop is moved to the original entry price (breakeven)
 # so the add-on is free-rolled on top of a protected base.  Only done once per trade.
-PYRAMID_TRIGGER_PCT = 0.03    # Add to position once it's up 3%
+PYRAMID_TRIGGER_PCT = 0.02    # Add to position once it's up 2%
 PYRAMID_ADD_PCT     = 0.50    # Add 50% of the original quantity
 
 # --- Kelly Criterion (dynamic risk sizing) ---
