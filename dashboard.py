@@ -9,6 +9,7 @@ import logging
 import os
 import threading
 import time
+from collections import deque
 from datetime import datetime
 
 from flask import Flask
@@ -38,12 +39,42 @@ _start_time = time.time()
 _etf_universe: list = []
 _etf_signals:  list = []
 
+# In-memory log ring buffer — last 200 lines captured from root logger
+_log_buffer: deque = deque(maxlen=200)
+
+LEVEL_COLOR = {
+    "DEBUG":    "#555",
+    "INFO":     "#8b949e",
+    "WARNING":  "#e67e22",
+    "ERROR":    "#e74c3c",
+    "CRITICAL": "#ff0000",
+}
+LEVEL_HIGHLIGHT = {"WARNING", "ERROR", "CRITICAL"}
+
+
+class _MemoryLogHandler(logging.Handler):
+    """Appends every log record to the shared _log_buffer deque."""
+    def emit(self, record):
+        try:
+            _log_buffer.append({
+                "time":  self.formatTime(record, "%H:%M:%S"),
+                "level": record.levelname,
+                "msg":   record.getMessage(),
+            })
+        except Exception:
+            pass
+
+
 def update_etf_state(universe: list, signals: list) -> None:
     """Called by bot.py after each ETF run so the dashboard can display current ETF info."""
     global _etf_universe, _etf_signals
     _etf_universe = universe
     _etf_signals  = signals
 
+
+# ---------------------------------------------------------------------------
+# Data helpers
+# ---------------------------------------------------------------------------
 
 def _account_data() -> dict:
     try:
@@ -71,32 +102,30 @@ def _positions_data() -> list:
         positions = _trader.get_positions()
         rows = []
         for sym, pos in positions.items():
-            entry  = float(pos.avg_entry_price)
-            curr   = float(pos.current_price)
-            qty    = float(pos.qty)
-            pnl    = float(pos.unrealized_pl)
+            entry   = float(pos.avg_entry_price)
+            curr    = float(pos.current_price)
+            qty     = float(pos.qty)
+            pnl     = float(pos.unrealized_pl)
             pnl_pct = float(pos.unrealized_plpc) * 100
             rows.append({
-                "symbol":    sym,
-                "side":      str(pos.side).replace("PositionSide.", ""),
-                "qty":       qty,
-                "entry":     entry,
-                "current":   curr,
-                "pnl":       pnl,
-                "pnl_pct":   pnl_pct,
-                "value":     abs(qty * curr),
+                "symbol":  sym,
+                "side":    str(pos.side).replace("PositionSide.", ""),
+                "qty":     qty,
+                "entry":   entry,
+                "current": curr,
+                "pnl":     pnl,
+                "pnl_pct": pnl_pct,
+                "value":   abs(qty * curr),
             })
         return sorted(rows, key=lambda x: x["pnl_pct"], reverse=True)
     except Exception as e:
         return [{"error": str(e)}]
 
 
-def _recent_trades(n: int = 30) -> list:
-    # Try DB first
+def _all_trades(n: int = 200) -> list:
     rows = db.get_trades(n)
     if rows:
         return rows
-    # Fallback: CSV
     journal = "trade_journal.csv"
     if not os.path.exists(journal):
         return []
@@ -108,17 +137,22 @@ def _recent_trades(n: int = 30) -> list:
         return []
 
 
+def _closed_trades(n: int = 10) -> list:
+    """Return the last N closing events (CLOSE / SELL / COVER)."""
+    all_t  = _all_trades(200)
+    closed = [t for t in all_t if t.get("action", "") in ("CLOSE", "SELL", "COVER")]
+    return closed[:n]
+
+
 def _market_status() -> dict:
     """Return ETF market open/closed status and countdown (US Eastern time)."""
     from datetime import timezone, timedelta
     now_utc = datetime.now(timezone.utc)
-    # EDT = UTC-4 (Mar–Nov), EST = UTC-5 (Nov–Mar). March 31 = EDT.
-    # Simple rule: UTC offset is -4 from second Sunday of March to first Sunday of November
-    month = now_utc.month
+    month   = now_utc.month
     et_offset = timedelta(hours=-4) if 3 <= month <= 10 else timedelta(hours=-5)
-    now_et = now_utc + et_offset
+    now_et    = now_utc + et_offset
 
-    is_weekday   = now_et.weekday() < 5   # Mon=0 … Fri=4
+    is_weekday   = now_et.weekday() < 5
     market_open  = now_et.replace(hour=9,  minute=30, second=0, microsecond=0)
     market_close = now_et.replace(hour=16, minute=0,  second=0, microsecond=0)
     is_open      = is_weekday and market_open <= now_et <= market_close
@@ -136,7 +170,6 @@ def _market_status() -> dict:
         return {"open": False, "label": "CLOSED", "sub": f"opens in {_fmt(market_open - now_et)}",
                 "et_time": now_et.strftime("%H:%M ET")}
     else:
-        # Weekend — find next Monday open
         days_ahead = (7 - now_et.weekday()) % 7 or 7
         next_open  = (now_et + timedelta(days=days_ahead)).replace(
                          hour=9, minute=30, second=0, microsecond=0)
@@ -161,12 +194,11 @@ def _bot_status() -> dict:
             datetime.fromtimestamp(last_refresh).strftime("%H:%M:%S")
             if last_refresh > 0 else ("Loading..." if refreshing else "Pending first refresh")
         ),
-        "daily_halt":     _live._daily_halt if _live else False,
+        "daily_halt": _live._daily_halt if _live else False,
     }
 
 
 def _config_info() -> dict:
-    """Snapshot of all key config parameters — displayed in the dashboard deploy section."""
     from live_trader import TRADE_COOLDOWN, FULL_REFRESH_INTERVAL
     kelly_risk = None
     try:
@@ -175,226 +207,302 @@ def _config_info() -> dict:
     except Exception:
         pass
     return {
-        # Risk
-        "risk_per_trade":    f"{RISK_PER_TRADE_PCT*100:.1f}%",
-        "kelly_risk":        f"{kelly_risk*100:.2f}% (active)" if kelly_risk and kelly_risk != RISK_PER_TRADE_PCT else f"{RISK_PER_TRADE_PCT*100:.1f}% (base — Kelly pending {KELLY_MIN_TRADES} trades)",
-        "max_stop":          f"{STOP_LOSS_MAX_PCT*100:.0f}%",
-        "max_tp":            f"{TAKE_PROFIT_MAX_PCT*100:.0f}%",
-        "trailing_stop":     f"{TRAILING_STOP_PCT*100:.0f}%",
-        "daily_loss_limit":  f"{DAILY_LOSS_LIMIT_PCT*100:.0f}%",
-        # Positions
-        "max_long_etf":      MAX_POSITIONS,
-        "max_short_etf":     MAX_SHORT_POSITIONS,
-        "max_crypto":        MAX_CRYPTO_POSITIONS,
-        # Signals
-        "buy_threshold":     f"≥ +{MIN_BUY_SCORE}",
-        "sell_threshold":    f"≤ {MIN_SELL_SCORE}",
-        # Universe
-        "etf_pool":          f"{len(ETF_CANDIDATES)} candidates → top {SCREEN_TOP_N_ETF} active",
-        "crypto_pool":       f"{len(CRYPTO_CANDIDATES)} candidates → top {SCREEN_TOP_N_CRYPTO} active",
-        # Timing
-        "etf_interval":      f"every {RUN_INTERVAL_MINUTES} min (market + ext hours)",
-        "crypto_cooldown":   f"{TRADE_COOLDOWN}s between trades per symbol",
-        "data_refresh":      f"every {FULL_REFRESH_INTERVAL//60} min",
-        # Features
-        "btc_filter":        "ON" if BTC_CORRELATION_FILTER else "OFF",
-        "pyramid":           f"ON — adds {int(PYRAMID_ADD_PCT*100)}% at +{int(PYRAMID_TRIGGER_PCT*100)}%",
-        "kelly_fraction":    f"{int(KELLY_FRACTION*100)}% Kelly (activates after {KELLY_MIN_TRADES} trades, max {KELLY_MAX_RISK*100:.0f}%)",
+        "risk_per_trade":   f"{RISK_PER_TRADE_PCT*100:.1f}%",
+        "kelly_risk":       f"{kelly_risk*100:.2f}% (active)" if kelly_risk and kelly_risk != RISK_PER_TRADE_PCT else f"{RISK_PER_TRADE_PCT*100:.1f}% (base — Kelly pending {KELLY_MIN_TRADES} trades)",
+        "max_stop":         f"{STOP_LOSS_MAX_PCT*100:.0f}%",
+        "max_tp":           f"{TAKE_PROFIT_MAX_PCT*100:.0f}%",
+        "trailing_stop":    f"{TRAILING_STOP_PCT*100:.0f}%",
+        "daily_loss_limit": f"{DAILY_LOSS_LIMIT_PCT*100:.0f}%",
+        "max_long_etf":     MAX_POSITIONS,
+        "max_short_etf":    MAX_SHORT_POSITIONS,
+        "max_crypto":       MAX_CRYPTO_POSITIONS,
+        "buy_threshold":    f"≥ +{MIN_BUY_SCORE}",
+        "sell_threshold":   f"≤ {MIN_SELL_SCORE}",
+        "etf_pool":         f"{len(ETF_CANDIDATES)} candidates → top {SCREEN_TOP_N_ETF} active",
+        "crypto_pool":      f"{len(CRYPTO_CANDIDATES)} candidates → top {SCREEN_TOP_N_CRYPTO} active",
+        "etf_interval":     f"every {RUN_INTERVAL_MINUTES} min (market + ext hours)",
+        "crypto_cooldown":  f"{TRADE_COOLDOWN}s between trades per symbol",
+        "data_refresh":     f"every {FULL_REFRESH_INTERVAL//60} min",
+        "btc_filter":       "ON" if BTC_CORRELATION_FILTER else "OFF",
+        "pyramid":          f"ON — adds {int(PYRAMID_ADD_PCT*100)}% at +{int(PYRAMID_TRIGGER_PCT*100)}%",
+        "kelly_fraction":   f"{int(KELLY_FRACTION*100)}% Kelly (activates after {KELLY_MIN_TRADES} trades, max {KELLY_MAX_RISK*100:.0f}%)",
     }
 
 
-def _color(val: float, positive="green", negative="red") -> str:
-    return positive if val >= 0 else negative
-
-
-def _pnl_badge(pct: float) -> str:
+def _pnl_badge(pct: float, show_sign=True) -> str:
     color = "#2ecc71" if pct >= 0 else "#e74c3c"
-    sign  = "+" if pct >= 0 else ""
+    sign  = "+" if pct >= 0 and show_sign else ""
     return f'<span style="color:{color};font-weight:600">{sign}{pct:.2f}%</span>'
 
 
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
+
 @app.route("/")
 def index():
-    account  = _account_data()
+    account   = _account_data()
     positions = _positions_data()
-    trades   = _recent_trades()
-    stats    = get_stats()
-    status   = _bot_status()
-    cfg      = _config_info()
+    closed    = _closed_trades(10)
+    stats     = get_stats()
+    status    = _bot_status()
+    cfg       = _config_info()
+    now       = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    mkt       = _market_status()
 
-    # ---- Build HTML ----
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    # Account cards
-    if "error" in account:
-        account_html = f'<p style="color:#e74c3c">Alpaca error: {account["error"]}</p>'
+    # ── Header pills ──────────────────────────────────────────────────────────
+    if "error" not in account:
+        eq_pill     = f'<span class="pill">${account["equity"]:,.2f}</span>'
+        dpnl_color  = "#2ecc71" if account["daily_pnl"] >= 0 else "#e74c3c"
+        tpnl_color  = "#2ecc71" if account["total_pnl"] >= 0 else "#e74c3c"
+        dpnl_sign   = "+" if account["daily_pnl"] >= 0 else ""
+        tpnl_sign   = "+" if account["total_pnl"] >= 0 else ""
+        daily_pill  = (f'<span class="pill" style="color:{dpnl_color}">'
+                       f'Day {dpnl_sign}${account["daily_pnl"]:,.2f} ({dpnl_sign}{account["daily_pct"]:.2f}%)</span>')
+        total_pill  = (f'<span class="pill" style="color:{tpnl_color}">'
+                       f'Total {tpnl_sign}${account["total_pnl"]:,.2f} ({tpnl_sign}{account["total_pct"]:.2f}%)</span>')
     else:
-        def card(label, value, sub=""):
-            return f"""
-            <div class="card">
-                <div class="card-label">{label}</div>
-                <div class="card-value">{value}</div>
-                {"<div class='card-sub'>" + sub + "</div>" if sub else ""}
-            </div>"""
+        eq_pill = daily_pill = total_pill = '<span class="pill" style="color:#e74c3c">API error</span>'
 
-        daily_color = "#2ecc71" if account["daily_pnl"] >= 0 else "#e74c3c"
-        total_color = "#2ecc71" if account["total_pnl"] >= 0 else "#e74c3c"
-        account_html = f"""
-        <div class="cards">
-            {card("Portfolio Value", f"${account['equity']:,.2f}")}
-            {card("Cash", f"${account['cash']:,.2f}")}
-            {card("Daily P&L",
-                  f'<span style="color:{daily_color}">${account["daily_pnl"]:+,.2f}</span>',
-                  f'<span style="color:{daily_color}">{account["daily_pct"]:+.2f}%</span>')}
-            {card("Total P&L",
-                  f'<span style="color:{total_color}">${account["total_pnl"]:+,.2f}</span>',
-                  f'<span style="color:{total_color}">{account["total_pct"]:+.2f}% from $2,000')}
-        </div>"""
+    # W/L pill from stats
+    if stats.get("completed", 0) > 0:
+        wl_color = "#2ecc71" if stats["win_rate"] >= 45 else "#e74c3c"
+        wl_pill  = (f'<span class="pill" style="color:{wl_color}">'
+                    f'W/L {stats["wins"]}/{stats["losses"]} ({stats["win_rate"]}%)</span>')
+    else:
+        wl_pill = '<span class="pill" style="color:#888">W/L —</span>'
 
-    # Positions table
-    if not positions:
-        pos_html = '<p style="color:#888">No open positions</p>'
-    elif "error" in positions[0]:
-        pos_html = f'<p style="color:#e74c3c">{positions[0]["error"]}</p>'
+    halt_pill = ('<span class="pill" style="color:#e74c3c">⛔ HALTED</span>'
+                 if status["daily_halt"] else
+                 '<span class="pill" style="color:#2ecc71">✅ BOT ACTIVE</span>')
+    mkt_color = "#2ecc71" if mkt["open"] else "#e74c3c"
+    mkt_pill  = (f'<span class="pill" style="color:{mkt_color}">'
+                 f'ETF {mkt["label"]} · {mkt["sub"]}</span>')
+
+    # ── Open Positions ────────────────────────────────────────────────────────
+    open_count = len([p for p in positions if "error" not in p])
+    if not positions or "error" in positions[0]:
+        pos_html = '<p class="empty">No open positions</p>'
     else:
         rows = ""
         for p in positions:
-            color = "#2ecc71" if p["pnl_pct"] >= 0 else "#e74c3c"
+            c = "#2ecc71" if p["pnl_pct"] >= 0 else "#e74c3c"
             rows += f"""<tr>
                 <td><b>{p["symbol"]}</b></td>
                 <td style="color:#aaa">{p["side"]}</td>
                 <td>{p["qty"]}</td>
                 <td>${p["entry"]:.4f}</td>
                 <td>${p["current"]:.4f}</td>
-                <td style="color:{color}">${p["pnl"]:+.2f}</td>
-                <td style="color:{color}">{_pnl_badge(p["pnl_pct"])}</td>
+                <td style="color:{c}">${p["pnl"]:+.2f}</td>
+                <td>{_pnl_badge(p["pnl_pct"])}</td>
                 <td>${p["value"]:,.2f}</td>
             </tr>"""
-        pos_html = f"""
-        <table>
+        pos_html = f"""<table>
             <thead><tr>
                 <th>Symbol</th><th>Side</th><th>Qty</th>
                 <th>Entry</th><th>Current</th><th>P&L $</th><th>P&L %</th><th>Value</th>
-            </tr></thead>
-            <tbody>{rows}</tbody>
-        </table>"""
+            </tr></thead><tbody>{rows}</tbody></table>"""
 
-    # Performance stats
-    if "error" in stats:
-        perf_html = f'<p style="color:#888">{stats["error"]}</p>'
-    elif stats.get("completed", 0) == 0:
-        perf_html = f'<p style="color:#888">{stats.get("message", "No closed trades yet")} ({stats.get("total_entries",0)} entries opened)</p>'
-    else:
-        def stat_row(label, value, target="", good=True):
-            icon = "✅" if good else "⚠️"
-            return f"""<tr>
-                <td>{label}</td>
-                <td><b>{value}</b></td>
-                <td>{icon + " " + target if target else ""}</td>
+    # Crypto entry tracking (trailing stops)
+    if status["open_entries"]:
+        entry_rows = ""
+        for sym, e in status["open_entries"].items():
+            side         = e.get("side", "long")
+            entry_price  = e["price"]
+            initial_stop = e.get("stop", 0)
+            if side == "short":
+                trough      = e.get("trough_price", entry_price)
+                trail_stop  = trough * (1 + TRAILING_STOP_PCT)
+                eff_stop    = min(initial_stop, trail_stop)
+                peak_lbl    = f"${trough:.4f}"
+                stop_active = trail_stop < initial_stop
+            else:
+                peak_price  = e.get("peak_price", entry_price)
+                trail_stop  = peak_price * (1 - TRAILING_STOP_PCT)
+                eff_stop    = max(initial_stop, trail_stop)
+                gain_pct    = (peak_price - entry_price) / entry_price * 100
+                peak_lbl    = f"${peak_price:.4f} <small style='color:#2ecc71'>({gain_pct:+.1f}%)</small>"
+                stop_active = trail_stop > initial_stop
+            stop_color  = "#2ecc71" if stop_active else "#e67e22"
+            trail_label = "✅ trailing" if stop_active else "⚠️ initial"
+            side_badge  = f'<span style="color:{"#e74c3c" if side=="short" else "#2ecc71"}">{side}</span>'
+            entry_rows += f"""<tr>
+                <td><b>{sym}</b></td>
+                <td>{side_badge}</td>
+                <td>${entry_price:.4f}</td>
+                <td style="color:{stop_color}">${eff_stop:.4f} <small>({trail_label})</small></td>
+                <td>{peak_lbl}</td>
+                <td>{"✅" if e.get("pyramided") else "—"}</td>
             </tr>"""
+        entries_html = f"""<table>
+            <thead><tr>
+                <th>Symbol</th><th>Side</th><th>Entry</th><th>Eff. Stop</th><th>Peak / Trough</th><th>Pyramided</th>
+            </tr></thead><tbody>{entry_rows}</tbody></table>"""
+    else:
+        entries_html = '<p class="empty">No tracked crypto entries</p>'
 
-        wr_good = stats["win_rate"] >= 45
-        pf_good = stats["profit_factor"] >= 1.5
-        perf_html = f"""
-        <table>
-            <thead><tr><th>Metric</th><th>Value</th><th>Target</th></tr></thead>
-            <tbody>
-                {stat_row("Entries opened", stats["total_entries"])}
-                {stat_row("Closed trades", f"{stats['completed']} ({stats['wins']}W / {stats['losses']}L)")}
-                {stat_row("Win rate", f"{stats['win_rate']}%", "≥ 45%", wr_good)}
-                {stat_row("Avg win", f"+{stats['avg_win_pct']}%")}
-                {stat_row("Avg loss", f"{stats['avg_loss_pct']}%")}
-                {stat_row("Profit factor", stats['profit_factor'], "≥ 1.5", pf_good)}
-                {stat_row("Total closed P&L", f"{stats['total_pnl_pct']:+.2f}%")}
-            </tbody>
-        </table>"""
-
-    # Recent trades table
-    if not trades:
-        trades_html = '<p style="color:#888">No trades logged yet</p>'
+    # ── Last 10 Closed Trades ─────────────────────────────────────────────────
+    if not closed:
+        closed_html = '<p class="empty">No closed trades yet</p>'
     else:
         rows = ""
-        for t in trades:
+        for t in closed:
             action = t.get("action", "")
-            color  = {"BUY": "#2ecc71", "SELL": "#e74c3c", "SHORT": "#e67e22",
-                      "COVER": "#3498db", "CLOSE": "#9b59b6"}.get(action, "#aaa")
+            color  = {"SELL": "#e74c3c", "COVER": "#3498db", "CLOSE": "#9b59b6"}.get(action, "#aaa")
+            try:
+                price_fmt = f'${float(t["price"]):.4f}'
+            except Exception:
+                price_fmt = t.get("price", "")
+            note = t.get("note", "")
+            pnl_html = ""
+            if "pnl=" in note:
+                try:
+                    pnl_str = note.split("pnl=")[1].split("%")[0] + "%"
+                    pnl_val = float(pnl_str.replace("%", ""))
+                    pnl_html = _pnl_badge(pnl_val)
+                except Exception:
+                    pnl_html = f'<span style="color:#888">{note[:40]}</span>'
+            else:
+                pnl_html = f'<span style="color:#888;font-size:12px">{note[:40]}</span>'
             rows += f"""<tr>
                 <td style="color:#888;font-size:12px">{t.get("timestamp","")}</td>
                 <td style="color:{color};font-weight:600">{action}</td>
                 <td><b>{t.get("symbol","")}</b></td>
-                <td>{t.get("qty","")}</td>
-                <td>${float(t["price"]):.4f}</td>
-                <td style="color:#aaa;font-size:12px">{t.get("note","")[:60]}</td>
+                <td>{price_fmt}</td>
+                <td>{pnl_html}</td>
             </tr>"""
-        trades_html = f"""
-        <table>
-            <thead><tr>
-                <th>Time</th><th>Action</th><th>Symbol</th><th>Qty</th><th>Price</th><th>Note</th>
-            </tr></thead>
-            <tbody>{rows}</tbody>
-        </table>"""
+        closed_html = f"""<table>
+            <thead><tr><th>Time</th><th>Action</th><th>Symbol</th><th>Price</th><th>P&L / Note</th></tr></thead>
+            <tbody>{rows}</tbody></table>"""
 
-    # Bot + market status
-    halt_badge  = '<span style="color:#e74c3c;font-weight:600">⛔ HALTED</span>' if status["daily_halt"] else '<span style="color:#2ecc71">✅ ACTIVE</span>'
-    active_syms = ", ".join(status["active_symbols"]) or (
-        '<span style="color:#f39c12">⏳ Loading data...</span>' if status["refreshing"]
-        else '<span style="color:#888">Pending first refresh</span>'
-    )
-    mkt         = _market_status()
-    mkt_color   = "#2ecc71" if mkt["open"] else "#e74c3c"
-    mkt_badge   = f'<span style="color:{mkt_color};font-weight:600">{mkt["label"]}</span>'
+    # ── Live Logs ─────────────────────────────────────────────────────────────
+    log_lines = list(_log_buffer)[-100:]   # last 100 lines, newest at bottom
+    if log_lines:
+        log_items = ""
+        for line in log_lines:
+            lvl   = line["level"]
+            color = LEVEL_COLOR.get(lvl, "#8b949e")
+            bold  = "font-weight:600;" if lvl in LEVEL_HIGHLIGHT else ""
+            bg    = "background:#1a0a0a;" if lvl == "ERROR" else (
+                    "background:#1a1200;" if lvl == "WARNING" else "")
+            log_items += (
+                f'<div style="padding:2px 0;{bg}">'
+                f'<span style="color:#555;user-select:none">{line["time"]} </span>'
+                f'<span style="color:{color};{bold}min-width:60px;display:inline-block">[{lvl}]</span> '
+                f'<span style="color:#cdd9e5">{line["msg"]}</span>'
+                f'</div>'
+            )
+        logs_html = f"""
+        <div style="background:#0d1117;border:1px solid #21262d;border-radius:8px;
+                    padding:14px;font-family:\'Courier New\',monospace;font-size:12px;
+                    max-height:500px;overflow-y:auto;line-height:1.5" id="logbox">
+            {log_items}
+        </div>
+        <script>
+            var lb = document.getElementById("logbox");
+            if(lb) lb.scrollTop = lb.scrollHeight;
+        </script>"""
+    else:
+        logs_html = '<p class="empty">No logs captured yet</p>'
 
-    # Active ETF universe
+    # ── ETF Signals ───────────────────────────────────────────────────────────
     if _etf_signals:
         etf_rows = ""
         for sig in sorted(_etf_signals, key=lambda x: x["score"], reverse=True):
-            sc    = sig["score"]
+            sc       = sig["score"]
             sc_color = "#2ecc71" if sc > 0 else ("#e74c3c" if sc < 0 else "#888")
-            sig_color = {"BUY": "#2ecc71", "SELL": "#e74c3c", "HOLD": "#888"}.get(sig["signal"], "#888")
+            sg_color = {"BUY": "#2ecc71", "SELL": "#e74c3c", "HOLD": "#888"}.get(sig["signal"], "#888")
             etf_rows += f"""<tr>
                 <td><b>{sig["ticker"]}</b></td>
                 <td style="color:{sc_color}">{sc:+d}</td>
-                <td style="color:{sig_color};font-weight:600">{sig["signal"]}</td>
+                <td style="color:{sg_color};font-weight:600">{sig["signal"]}</td>
                 <td>${sig["price"]:.2f}</td>
                 <td style="color:#888;font-size:12px">{sig.get("regime","")}</td>
             </tr>"""
-        etf_html = f"""
-        <table>
+        etf_html = f"""<table>
             <thead><tr><th>Ticker</th><th>Score</th><th>Signal</th><th>Price</th><th>Regime</th></tr></thead>
-            <tbody>{etf_rows}</tbody>
-        </table>"""
+            <tbody>{etf_rows}</tbody></table>"""
     else:
-        etf_html = '<p style="color:#888">No ETF data yet — market may be closed or first run pending</p>'
+        etf_html = '<p class="empty">No ETF data yet — market may be closed or first run pending</p>'
 
-    # Open entries (manual stops/trails)
-    if status["open_entries"]:
-        entry_rows = ""
-        for sym, e in status["open_entries"].items():
-            entry_price  = e["price"]
-            peak_price   = e.get("peak_price", entry_price)
-            initial_stop = e.get("stop", 0)
-            trail_stop   = peak_price * (1 - TRAILING_STOP_PCT)
-            eff_stop     = max(initial_stop, trail_stop)
-            peak_pct     = (peak_price - entry_price) / entry_price * 100
-            stop_color   = "#2ecc71" if eff_stop > initial_stop else "#e67e22"
-            trail_label  = "✅ trailing" if eff_stop > initial_stop else "⚠️ initial"
-            pyramided    = "✅" if e.get("pyramided") else "—"
-            entry_rows += f"""<tr>
-                <td><b>{sym}</b></td>
-                <td>${entry_price:.4f}</td>
-                <td style="color:{stop_color}">${eff_stop:.4f} <small>({trail_label})</small></td>
-                <td>${peak_price:.4f} <small style="color:#2ecc71">({peak_pct:+.1f}%)</small></td>
-                <td>{pyramided}</td>
-            </tr>"""
-        entries_html = f"""
-        <table>
-            <thead><tr>
-                <th>Symbol</th><th>Entry</th><th>Effective Stop</th><th>Peak</th><th>Pyramided</th>
-            </tr></thead>
-            <tbody>{entry_rows}</tbody>
-        </table>"""
+    # ── Performance Stats ─────────────────────────────────────────────────────
+    if "error" in stats:
+        perf_html = f'<p class="empty">{stats["error"]}</p>'
+    elif stats.get("completed", 0) == 0:
+        perf_html = f'<p class="empty">{stats.get("message","No closed trades yet")} ({stats.get("total_entries",0)} entries opened)</p>'
     else:
-        entries_html = '<p style="color:#888">No tracked crypto entries</p>'
+        def stat_row(label, value, target="", good=True):
+            icon = "✅" if good else "⚠️"
+            return f"<tr><td>{label}</td><td><b>{value}</b></td><td>{icon+' '+target if target else ''}</td></tr>"
+        perf_html = f"""<table>
+            <thead><tr><th>Metric</th><th>Value</th><th>Target</th></tr></thead><tbody>
+                {stat_row("Entries opened",  stats["total_entries"])}
+                {stat_row("Closed trades",   f"{stats['completed']} ({stats['wins']}W / {stats['losses']}L)")}
+                {stat_row("Win rate",        f"{stats['win_rate']}%", "≥ 45%", stats["win_rate"] >= 45)}
+                {stat_row("Avg win",         f"+{stats['avg_win_pct']}%")}
+                {stat_row("Avg loss",        f"{stats['avg_loss_pct']}%")}
+                {stat_row("Profit factor",   stats["profit_factor"], "≥ 1.5", stats["profit_factor"] >= 1.5)}
+                {stat_row("Total closed P&L",f"{stats['total_pnl_pct']:+.2f}%")}
+            </tbody></table>"""
+
+    # ── Bot Configuration ─────────────────────────────────────────────────────
+    def cfg_tbl(*rows_data):
+        rows = "".join(
+            f'<tr><td style="color:#8b949e;padding:3px 12px 3px 0">{k}</td>'
+            f'<td style="color:{c}">{v}</td></tr>'
+            for k, v, c in rows_data
+        )
+        return f'<table style="background:transparent;font-size:13px">{rows}</table>'
+
+    cfg_html = f"""
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px">
+        <div class="cfg-card">
+            <div class="cfg-title">⚖️ Risk Management</div>
+            {cfg_tbl(
+                ("Risk/trade",    cfg["risk_per_trade"],   "#e6edf3"),
+                ("Kelly sizing",  cfg["kelly_risk"],       "#58a6ff"),
+                ("Max stop-loss", cfg["max_stop"],         "#e74c3c"),
+                ("Max take-profit",cfg["max_tp"],          "#2ecc71"),
+                ("Trailing stop", cfg["trailing_stop"],    "#e6edf3"),
+                ("Daily halt",    cfg["daily_loss_limit"], "#e74c3c"),
+            )}
+        </div>
+        <div class="cfg-card">
+            <div class="cfg-title">📊 Positions &amp; Signals</div>
+            {cfg_tbl(
+                ("Max ETF longs",  str(cfg["max_long_etf"]),  "#e6edf3"),
+                ("Max ETF shorts", str(cfg["max_short_etf"]), "#e6edf3"),
+                ("Max crypto",     str(cfg["max_crypto"]),    "#e6edf3"),
+                ("Buy threshold",  cfg["buy_threshold"],      "#2ecc71"),
+                ("Sell threshold", cfg["sell_threshold"],     "#e74c3c"),
+            )}
+        </div>
+        <div class="cfg-card">
+            <div class="cfg-title">🌐 Universe &amp; Timing</div>
+            {cfg_tbl(
+                ("ETF pool",       cfg["etf_pool"],       "#e6edf3"),
+                ("Crypto pool",    cfg["crypto_pool"],    "#e6edf3"),
+                ("ETF runs",       cfg["etf_interval"],   "#e6edf3"),
+                ("Crypto cooldown",cfg["crypto_cooldown"],"#e6edf3"),
+                ("Data refresh",   cfg["data_refresh"],   "#e6edf3"),
+            )}
+        </div>
+        <div class="cfg-card">
+            <div class="cfg-title">🤖 Features</div>
+            {cfg_tbl(
+                ("BTC filter",    cfg["btc_filter"],       "#58a6ff"),
+                ("Pyramiding",    cfg["pyramid"],          "#2ecc71"),
+                ("Kelly",         cfg["kelly_fraction"],   "#e6edf3"),
+                ("ETF shorts",    "ON (US equities only)", "#2ecc71"),
+                ("Ext hours",     "ON 4AM–9:30AM/4PM–8PM","#2ecc71"),
+            )}
+        </div>
+    </div>"""
+
+    # ── Active crypto (for header) ────────────────────────────────────────────
+    active_syms = ", ".join(s.replace("/USD", "") for s in status["active_symbols"]) or (
+        "⏳ Loading..." if status["refreshing"] else "Pending first refresh"
+    )
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -410,22 +518,32 @@ def index():
             font-family: 'Courier New', monospace; font-size: 14px;
             padding: 20px;
         }}
-        h1 {{ color: #58a6ff; font-size: 22px; margin-bottom: 4px; }}
-        h2 {{ color: #8b949e; font-size: 13px; font-weight: normal;
-              text-transform: uppercase; letter-spacing: 1px;
-              margin: 28px 0 10px; border-bottom: 1px solid #21262d; padding-bottom: 6px; }}
-        .header {{ display: flex; justify-content: space-between; align-items: center;
-                   margin-bottom: 24px; }}
-        .refresh {{ color: #8b949e; font-size: 12px; }}
-        .cards {{ display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 8px; }}
-        .card {{
-            background: #161b22; border: 1px solid #21262d;
-            border-radius: 8px; padding: 16px 20px; min-width: 180px; flex: 1;
+        h2 {{
+            color: #8b949e; font-size: 12px; font-weight: normal;
+            text-transform: uppercase; letter-spacing: 1px;
+            margin: 28px 0 10px;
+            border-bottom: 1px solid #21262d; padding-bottom: 6px;
         }}
-        .card-label {{ color: #8b949e; font-size: 12px; text-transform: uppercase;
-                       letter-spacing: 1px; margin-bottom: 6px; }}
-        .card-value {{ font-size: 22px; font-weight: 700; color: #e6edf3; }}
-        .card-sub {{ color: #8b949e; font-size: 13px; margin-top: 4px; }}
+        /* Header */
+        .topbar {{
+            display: flex; align-items: center; flex-wrap: wrap;
+            gap: 10px; margin-bottom: 24px;
+            background: #161b22; border: 1px solid #21262d;
+            border-radius: 10px; padding: 14px 18px;
+        }}
+        .topbar-title {{
+            color: #58a6ff; font-size: 18px; font-weight: 700;
+            margin-right: 8px; white-space: nowrap;
+        }}
+        .pill {{
+            background: #21262d; border: 1px solid #30363d;
+            border-radius: 20px; padding: 5px 14px;
+            font-size: 13px; white-space: nowrap;
+        }}
+        .topbar-right {{
+            margin-left: auto; color: #555; font-size: 11px; white-space: nowrap;
+        }}
+        /* Tables */
         table {{
             width: 100%; border-collapse: collapse;
             background: #161b22; border-radius: 8px; overflow: hidden;
@@ -438,121 +556,83 @@ def index():
         td {{ padding: 9px 12px; border-bottom: 1px solid #21262d; }}
         tr:last-child td {{ border-bottom: none; }}
         tr:hover td {{ background: #1c2128; }}
-        .status-row {{ display: flex; gap: 24px; flex-wrap: wrap;
-                       background: #161b22; border: 1px solid #21262d;
-                       border-radius: 8px; padding: 14px 18px; }}
-        .status-item {{ display: flex; flex-direction: column; gap: 4px; }}
-        .status-label {{ color: #8b949e; font-size: 11px; text-transform: uppercase; }}
-        .status-value {{ color: #e6edf3; }}
-        .active-syms {{ color: #58a6ff; font-size: 13px; }}
+        /* Config cards */
+        .cfg-card {{
+            background: #161b22; border: 1px solid #21262d;
+            border-radius: 8px; padding: 14px;
+        }}
+        .cfg-title {{
+            color: #8b949e; font-size: 11px; text-transform: uppercase;
+            letter-spacing: 1px; margin-bottom: 10px;
+        }}
+        .empty {{ color: #555; padding: 10px 0; }}
+        /* Active crypto bar */
+        .cryptobar {{
+            background: #161b22; border: 1px solid #21262d;
+            border-radius: 8px; padding: 10px 14px;
+            color: #58a6ff; font-size: 13px; margin-bottom: 4px;
+        }}
     </style>
 </head>
 <body>
-    <div class="header">
-        <div>
-            <h1>⚡ Trading Bot Dashboard</h1>
-            <div style="color:#8b949e;font-size:12px">Paper Trading · $2,000 Starting Capital</div>
-        </div>
-        <div class="refresh">Auto-refresh: 60s · Last updated: {now}</div>
-    </div>
 
-    <h2>Portfolio Overview</h2>
-    {account_html}
-
-    <h2>Bot Status</h2>
-    <div class="status-row">
-        <div class="status-item">
-            <div class="status-label">Bot</div>
-            <div class="status-value">{halt_badge}</div>
-        </div>
-        <div class="status-item">
-            <div class="status-label">Uptime</div>
-            <div class="status-value">{status["uptime"]}</div>
-        </div>
-        <div class="status-item">
-            <div class="status-label">ETF Market ({mkt["et_time"]})</div>
-            <div class="status-value">{mkt_badge}</div>
-            <div class="card-sub" style="color:#8b949e">{mkt["sub"]}</div>
-        </div>
-        <div class="status-item">
-            <div class="status-label">Last Data Refresh</div>
-            <div class="status-value">{status["last_refresh"]}</div>
-        </div>
-        <div class="status-item">
-            <div class="status-label">Active Crypto</div>
-            <div class="active-syms">{active_syms}</div>
+    <!-- ── TOP BAR ── -->
+    <div class="topbar">
+        <div class="topbar-title">⚡ Trading Bot</div>
+        {eq_pill}
+        {wl_pill}
+        {daily_pill}
+        {total_pill}
+        {halt_pill}
+        {mkt_pill}
+        <div class="topbar-right">
+            uptime {status["uptime"]} &nbsp;·&nbsp; refresh {status["last_refresh"]}<br>
+            auto-refresh 60s &nbsp;·&nbsp; {now}
         </div>
     </div>
 
-    <h2>Bot Configuration</h2>
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px">
-
-        <div style="background:#161b22;border:1px solid #21262d;border-radius:8px;padding:14px">
-            <div style="color:#8b949e;font-size:11px;text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">⚖️ Risk Management</div>
-            <table style="background:transparent;font-size:13px">
-                <tr><td style="color:#8b949e;padding:3px 12px 3px 0">Risk/trade</td><td style="color:#e6edf3"><b>{cfg["risk_per_trade"]}</b></td></tr>
-                <tr><td style="color:#8b949e;padding:3px 12px 3px 0">Kelly sizing</td><td style="color:#58a6ff">{cfg["kelly_risk"]}</td></tr>
-                <tr><td style="color:#8b949e;padding:3px 12px 3px 0">Max stop-loss</td><td style="color:#e74c3c">{cfg["max_stop"]}</td></tr>
-                <tr><td style="color:#8b949e;padding:3px 12px 3px 0">Max take-profit</td><td style="color:#2ecc71">{cfg["max_tp"]}</td></tr>
-                <tr><td style="color:#8b949e;padding:3px 12px 3px 0">Trailing stop</td><td style="color:#e6edf3">{cfg["trailing_stop"]}</td></tr>
-                <tr><td style="color:#8b949e;padding:3px 12px 3px 0">Daily halt</td><td style="color:#e74c3c">{cfg["daily_loss_limit"]}</td></tr>
-            </table>
-        </div>
-
-        <div style="background:#161b22;border:1px solid #21262d;border-radius:8px;padding:14px">
-            <div style="color:#8b949e;font-size:11px;text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">📊 Positions &amp; Signals</div>
-            <table style="background:transparent;font-size:13px">
-                <tr><td style="color:#8b949e;padding:3px 12px 3px 0">Max ETF longs</td><td style="color:#e6edf3"><b>{cfg["max_long_etf"]}</b></td></tr>
-                <tr><td style="color:#8b949e;padding:3px 12px 3px 0">Max ETF shorts</td><td style="color:#e6edf3"><b>{cfg["max_short_etf"]}</b></td></tr>
-                <tr><td style="color:#8b949e;padding:3px 12px 3px 0">Max crypto</td><td style="color:#e6edf3"><b>{cfg["max_crypto"]}</b></td></tr>
-                <tr><td style="color:#8b949e;padding:3px 12px 3px 0">Buy threshold</td><td style="color:#2ecc71">{cfg["buy_threshold"]}</td></tr>
-                <tr><td style="color:#8b949e;padding:3px 12px 3px 0">Sell threshold</td><td style="color:#e74c3c">{cfg["sell_threshold"]}</td></tr>
-            </table>
-        </div>
-
-        <div style="background:#161b22;border:1px solid #21262d;border-radius:8px;padding:14px">
-            <div style="color:#8b949e;font-size:11px;text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">🌐 Universe &amp; Timing</div>
-            <table style="background:transparent;font-size:13px">
-                <tr><td style="color:#8b949e;padding:3px 12px 3px 0">ETF pool</td><td style="color:#e6edf3">{cfg["etf_pool"]}</td></tr>
-                <tr><td style="color:#8b949e;padding:3px 12px 3px 0">Crypto pool</td><td style="color:#e6edf3">{cfg["crypto_pool"]}</td></tr>
-                <tr><td style="color:#8b949e;padding:3px 12px 3px 0">ETF runs</td><td style="color:#e6edf3">{cfg["etf_interval"]}</td></tr>
-                <tr><td style="color:#8b949e;padding:3px 12px 3px 0">Crypto cooldown</td><td style="color:#e6edf3">{cfg["crypto_cooldown"]}</td></tr>
-                <tr><td style="color:#8b949e;padding:3px 12px 3px 0">Data refresh</td><td style="color:#e6edf3">{cfg["data_refresh"]}</td></tr>
-            </table>
-        </div>
-
-        <div style="background:#161b22;border:1px solid #21262d;border-radius:8px;padding:14px">
-            <div style="color:#8b949e;font-size:11px;text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">🤖 Features</div>
-            <table style="background:transparent;font-size:13px">
-                <tr><td style="color:#8b949e;padding:3px 12px 3px 0">BTC filter</td><td style="color:#58a6ff">{cfg["btc_filter"]}</td></tr>
-                <tr><td style="color:#8b949e;padding:3px 12px 3px 0">Pyramiding</td><td style="color:#2ecc71">{cfg["pyramid"]}</td></tr>
-                <tr><td style="color:#8b949e;padding:3px 12px 3px 0">Kelly criterion</td><td style="color:#e6edf3">{cfg["kelly_fraction"]}</td></tr>
-                <tr><td style="color:#8b949e;padding:3px 12px 3px 0">ETF shorts</td><td style="color:#2ecc71">ON (US equities only)</td></tr>
-                <tr><td style="color:#8b949e;padding:3px 12px 3px 0">Ext hours</td><td style="color:#2ecc71">ON (4AM–9:30AM / 4PM–8PM ET)</td></tr>
-            </table>
-        </div>
-
+    <!-- ── ACTIVE CRYPTO ── -->
+    <div class="cryptobar">
+        🔍 Active crypto: <b>{active_syms}</b>
     </div>
 
-    <h2>Open Positions ({len([p for p in positions if "error" not in p])})</h2>
+    <!-- ── OPEN POSITIONS ── -->
+    <h2>Open Positions ({open_count})</h2>
     {pos_html}
 
+    <!-- ── CRYPTO ENTRY TRACKING ── -->
     <h2>Crypto Entry Tracking (Trailing Stops)</h2>
     {entries_html}
 
+    <!-- ── LAST 10 CLOSED TRADES ── -->
+    <h2>Last 10 Closed Trades</h2>
+    {closed_html}
+
+    <!-- ── LIVE LOGS ── -->
+    <h2>Live Bot Logs (last 100 lines)</h2>
+    {logs_html}
+
+    <!-- ── ETF SIGNALS ── -->
     <h2>ETF Signals (last run)</h2>
     {etf_html}
 
+    <!-- ── PERFORMANCE STATS ── -->
     <h2>Performance Stats</h2>
     {perf_html}
 
-    <h2>Recent Trades (last 30)</h2>
-    {trades_html}
+    <!-- ── BOT CONFIGURATION ── -->
+    <h2>Bot Configuration</h2>
+    {cfg_html}
+
 </body>
 </html>"""
 
     return html
 
+
+# ---------------------------------------------------------------------------
+# Start
+# ---------------------------------------------------------------------------
 
 def start_dashboard(trader_instance, live_instance) -> None:
     """Start the Flask dashboard in a background daemon thread."""
@@ -560,10 +640,14 @@ def start_dashboard(trader_instance, live_instance) -> None:
     _trader = trader_instance
     _live   = live_instance
 
+    # Attach memory log handler to root logger so all bot logs appear in dashboard
+    mem_handler = _MemoryLogHandler()
+    mem_handler.setLevel(logging.INFO)
+    logging.getLogger().addHandler(mem_handler)
+
     port = int(os.environ.get("PORT", 5000))
 
     def run():
-        # Silence Flask's default request logs to keep Railway logs clean
         log = logging.getLogger("werkzeug")
         log.setLevel(logging.ERROR)
         app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
