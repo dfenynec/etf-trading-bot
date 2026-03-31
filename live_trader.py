@@ -37,7 +37,7 @@ from config import (
     LOSS_THROTTLE_AFTER, RISK_PER_TRADE_PCT,
 )
 from screener import CRYPTO_CANDIDATES, screen_crypto
-from data_fetcher import fetch_all_crypto
+from data_fetcher import fetch_all_crypto, fetch_all_crypto_hourly
 from indicators import calculate_indicators
 from strategy import score_etf
 from risk_manager import calculate_stop_loss, calculate_take_profit, calculate_crypto_position_size
@@ -62,7 +62,8 @@ class LiveCryptoTrader:
     def __init__(self, trader: AlpacaTrader):
         self.trader      = trader
         self.stream      = CryptoDataStream(ALPACA_API_KEY, ALPACA_SECRET_KEY)
-        self._base_data  = {}           # symbol → daily OHLCV DataFrame
+        self._base_data  = {}           # symbol → hourly OHLCV DataFrame (primary signals)
+        self._daily_data = {}           # symbol → daily OHLCV DataFrame (macro trend filter)
         self._lock       = threading.Lock()
 
         # Data refresh
@@ -181,9 +182,13 @@ class LiveCryptoTrader:
         self._refreshing = True
         try:
             logger.info(f"[LIVE] Refreshing base data for {len(CRYPTO_CANDIDATES)} candidates...")
-            fresh = fetch_all_crypto(CRYPTO_CANDIDATES)
+            # Hourly bars → primary signal source
+            fresh_hourly = fetch_all_crypto_hourly(CRYPTO_CANDIDATES)
+            # Daily bars  → macro trend filter
+            fresh_daily  = fetch_all_crypto(CRYPTO_CANDIDATES)
             with self._lock:
-                self._base_data = fresh
+                self._base_data  = fresh_hourly
+                self._daily_data = fresh_daily
             # Re-rank and update the active trading set
             # BTC/USD excluded from trading — kept only as correlation filter
             ranked = [s for s in screen_crypto(fresh) if s != "BTC/USD"]
@@ -223,7 +228,23 @@ class LiveCryptoTrader:
             if float(bar.low) < self._base_data[symbol].at[idx, "low"]:
                 self._base_data[symbol].at[idx, "low"] = float(bar.low)
 
+    def _is_daily_uptrend(self, symbol: str) -> bool | None:
+        """
+        Macro trend filter: True if daily close > SMA50, False if below.
+        Returns None if not enough data (no filter applied).
+        """
+        with self._lock:
+            df = self._daily_data.get(symbol)
+        if df is None or df.empty or len(df) < 50:
+            return None
+        sma50 = df["close"].rolling(50).mean().iloc[-1]
+        return float(df["close"].iloc[-1]) > float(sma50)
+
     def _get_signal(self, symbol: str) -> dict | None:
+        """
+        Generate trading signal from hourly bars (primary timeframe).
+        Applies daily SMA50 macro filter to suppress signals against the trend.
+        """
         with self._lock:
             df = self._base_data.get(symbol)
         if df is None or df.empty:
@@ -231,10 +252,22 @@ class LiveCryptoTrader:
         df_ind = calculate_indicators(df.copy())
         if df_ind.empty:
             return None
-        return score_etf(df_ind, symbol)
+        signal = score_etf(df_ind, symbol)
+
+        # Macro filter: only trade in the direction of the daily trend
+        uptrend = self._is_daily_uptrend(symbol)
+        if uptrend is not None:
+            if signal["signal"] == "BUY" and not uptrend:
+                signal["signal"] = "HOLD"
+                signal["reasons"].insert(0, "Macro: below daily SMA50")
+            elif signal["signal"] == "SELL" and uptrend:
+                signal["signal"] = "HOLD"
+                signal["reasons"].insert(0, "Macro: above daily SMA50")
+
+        return signal
 
     def _get_btc_signal(self) -> dict | None:
-        """BTC signal used by the correlation filter."""
+        """BTC hourly signal used by the correlation filter."""
         with self._lock:
             df = self._base_data.get("BTC/USD")
         if df is None:

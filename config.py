@@ -100,4 +100,4 @@ POSITION_CACHE_TTL = 30       # Seconds to cache get_positions() (reduces API ca
 
 # --- Bot settings ---
 LOOKBACK_DAYS = 300           # Days of history to fetch for indicators
-RUN_INTERVAL_MINUTES = 60     # How often the ETF strategy runs (during market hours)
+RUN_INTERVAL_MINUTES = 30     # How often the ETF strategy runs (during market hours)

@@ -20,7 +20,7 @@ from config import (
     MAX_POSITIONS, MAX_SHORT_POSITIONS, DAILY_LOSS_LIMIT_PCT,
 )
 from screener import screen_etfs
-from data_fetcher import fetch_all_etfs
+from data_fetcher import fetch_all_etfs, fetch_all_etfs_hourly
 from indicators import calculate_indicators
 from risk_manager import calculate_position_size, calculate_stop_loss, calculate_take_profit
 from performance import print_stats, kelly_risk_pct
@@ -100,11 +100,30 @@ def run_etf_strategy() -> None:
     universe = screen_etfs()
     logger.info(f"Active ETF universe ({len(universe)}): {universe}")
 
-    all_data = fetch_all_etfs(universe)
+    # Hourly bars → primary signal source (responsive, intraday)
+    # Daily bars  → macro trend filter (is the asset in a long-term uptrend?)
+    all_data_hourly = fetch_all_etfs_hourly(universe)
+    all_data_daily  = fetch_all_etfs(universe)
+
     signals = []
-    for ticker, df in all_data.items():
-        df_ind = calculate_indicators(df)
+    for ticker, df_h in all_data_hourly.items():
+        df_ind = calculate_indicators(df_h)
         signal = score_etf(df_ind, ticker)
+
+        # Macro filter: suppress longs if price is below daily SMA50
+        # and suppress shorts if price is above daily SMA50
+        df_d = all_data_daily.get(ticker)
+        if df_d is not None and not df_d.empty and len(df_d) >= 50:
+            daily_sma50    = df_d["close"].rolling(50).mean().iloc[-1]
+            daily_close    = df_d["close"].iloc[-1]
+            daily_uptrend  = daily_close > daily_sma50
+            if signal["signal"] == "BUY" and not daily_uptrend:
+                signal["signal"] = "HOLD"
+                signal["reasons"].insert(0, "Macro filter: below daily SMA50 — suppressed BUY")
+            elif signal["signal"] == "SELL" and daily_uptrend:
+                signal["signal"] = "HOLD"
+                signal["reasons"].insert(0, "Macro filter: above daily SMA50 — suppressed SHORT")
+
         signals.append(signal)
 
     print_signal_table(signals, label="ETF")
