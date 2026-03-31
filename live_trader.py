@@ -238,11 +238,16 @@ class LiveCryptoTrader:
             if bar_date and row_date and bar_date != row_date:
                 return
 
-            self._base_data[symbol].at[idx, "close"] = float(bar.close)
-            if float(bar.high) > self._base_data[symbol].at[idx, "high"]:
-                self._base_data[symbol].at[idx, "high"] = float(bar.high)
-            if float(bar.low) < self._base_data[symbol].at[idx, "low"]:
-                self._base_data[symbol].at[idx, "low"] = float(bar.low)
+            # Use iloc[-1] instead of .at[idx] — avoids Series ambiguity
+            # when the DatetimeIndex has duplicate timestamps.
+            last = len(self._base_data[symbol]) - 1
+            self._base_data[symbol].iloc[last, self._base_data[symbol].columns.get_loc("close")] = float(bar.close)
+            cur_high = float(self._base_data[symbol].iloc[last]["high"])
+            cur_low  = float(self._base_data[symbol].iloc[last]["low"])
+            if float(bar.high) > cur_high:
+                self._base_data[symbol].iloc[last, self._base_data[symbol].columns.get_loc("high")] = float(bar.high)
+            if float(bar.low) < cur_low:
+                self._base_data[symbol].iloc[last, self._base_data[symbol].columns.get_loc("low")] = float(bar.low)
 
     def _is_daily_uptrend(self, symbol: str) -> bool | None:
         """

@@ -70,6 +70,7 @@ def update_etf_state(universe: list, signals: list) -> None:
     global _etf_universe, _etf_signals
     _etf_universe = universe
     _etf_signals  = signals
+    logger.info(f"[DASHBOARD] ETF state updated: {len(signals)} signals for {len(universe)} tickers")
 
 
 # ---------------------------------------------------------------------------
@@ -241,6 +242,14 @@ def _pnl_badge(pct: float, show_sign=True) -> str:
 
 @app.route("/")
 def index():
+    try:
+        return _render_dashboard()
+    except Exception as e:
+        logger.error(f"[DASHBOARD] Render error: {e}", exc_info=True)
+        return f"<pre style='color:#e74c3c;background:#0d1117;padding:20px'>Dashboard render error:\n{e}</pre>", 500
+
+
+def _render_dashboard():
     account   = _account_data()
     positions = _positions_data()
     closed    = _closed_trades(10)
@@ -414,7 +423,7 @@ def index():
             sg_color = {"BUY": "#2ecc71", "SELL": "#e74c3c", "HOLD": "#888"}.get(sig["signal"], "#888")
             etf_rows += f"""<tr>
                 <td><b>{sig["ticker"]}</b></td>
-                <td style="color:{sc_color}">{sc:+d}</td>
+                <td style="color:{sc_color}">{int(sc):+d}</td>
                 <td style="color:{sg_color};font-weight:600">{sig["signal"]}</td>
                 <td>${sig["price"]:.2f}</td>
                 <td style="color:#888;font-size:12px">{sig.get("regime","")}</td>
