@@ -29,6 +29,7 @@ from strategy import rank_buy_candidates, rank_sell_candidates, score_etf
 from trader import AlpacaTrader
 from live_trader import LiveCryptoTrader
 from trade_journal import log_trade
+from dashboard import start_dashboard
 
 # --- Logging setup ---
 logging.basicConfig(
@@ -219,6 +220,9 @@ def main() -> None:
     crypto_thread = threading.Thread(target=live.run, daemon=True, name="LiveCryptoTrader")
     crypto_thread.start()
     logger.info("LiveCryptoTrader started in background thread.\n")
+
+    # --- Start web dashboard ---
+    start_dashboard(trader, live)
 
     # --- Run ETF strategy immediately, then on schedule ---
     run_etf_strategy()
