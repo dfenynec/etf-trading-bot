@@ -1,8 +1,11 @@
 import logging
+from datetime import datetime, time as dtime
+from zoneinfo import ZoneInfo
 
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import (
     MarketOrderRequest,
+    LimitOrderRequest,
     StopLossRequest,
     TakeProfitRequest,
 )
@@ -82,6 +85,13 @@ class AlpacaTrader:
     def is_market_open(self) -> bool:
         return self.client.get_clock().is_open
 
+    def is_extended_hours(self) -> bool:
+        """True during Alpaca's extended trading window: 4:00–9:29 AM or 4:01–8:00 PM ET.
+        Note: only limit orders are supported during extended hours — no bracket/OTO."""
+        et = ZoneInfo("America/New_York")
+        t  = datetime.now(et).time()
+        return (dtime(4, 0) <= t < dtime(9, 30)) or (dtime(16, 0) < t <= dtime(20, 0))
+
     # --- Positions ---
 
     def get_positions(self) -> dict:
@@ -107,14 +117,27 @@ class AlpacaTrader:
     # --- Orders ---
 
     def buy(self, ticker: str, qty: int,
-            stop_loss: float = None, take_profit: float = None) -> bool:
+            stop_loss: float = None, take_profit: float = None,
+            price: float = None) -> bool:
         """
         Place a buy order with server-side stop-loss.
-        - stop_loss + take_profit → BRACKET (stop + TP)
-        - stop_loss only          → OTO (stop only, no TP cap — lets winners run)
-        - neither                 → plain market order
+        - During regular hours:  market order with OTO/BRACKET stop
+        - During extended hours: limit order at price+0.2% (no bracket — Alpaca doesn't allow it)
         """
         try:
+            if self.is_extended_hours():
+                if price is None:
+                    logger.warning(f"Extended hours BUY for {ticker}: no price provided — skipping")
+                    return False
+                limit_price = round(price * 1.002, 2)  # 0.2% above current — ensures fill
+                result = self.client.submit_order(LimitOrderRequest(
+                    symbol=ticker, qty=qty, side=OrderSide.BUY,
+                    time_in_force=TimeInForce.DAY,
+                    limit_price=limit_price, extended_hours=True,
+                ))
+                logger.info(f"EXT-HOURS BUY submitted: {qty}x {ticker} @ limit ${limit_price} | ID: {result.id}")
+                return True
+
             kwargs = dict(
                 symbol=ticker,
                 qty=qty,
@@ -160,13 +183,27 @@ class AlpacaTrader:
             return False
 
     def short(self, ticker: str, qty: int,
-              stop_loss: float = None, take_profit: float = None) -> bool:
+              stop_loss: float = None, take_profit: float = None,
+              price: float = None) -> bool:
         """
         Open a short order — stop is ABOVE entry, target is BELOW entry.
-        - stop_loss + take_profit → BRACKET
-        - stop_loss only          → OTO (no TP cap)
+        - During regular hours:  market order with OTO/BRACKET stop
+        - During extended hours: limit order at price-0.2% (no bracket)
         """
         try:
+            if self.is_extended_hours():
+                if price is None:
+                    logger.warning(f"Extended hours SHORT for {ticker}: no price provided — skipping")
+                    return False
+                limit_price = round(price * 0.998, 2)  # 0.2% below current — ensures fill
+                result = self.client.submit_order(LimitOrderRequest(
+                    symbol=ticker, qty=qty, side=OrderSide.SELL,
+                    time_in_force=TimeInForce.DAY,
+                    limit_price=limit_price, extended_hours=True,
+                ))
+                logger.info(f"EXT-HOURS SHORT submitted: {qty}x {ticker} @ limit ${limit_price} | ID: {result.id}")
+                return True
+
             kwargs = dict(
                 symbol=ticker,
                 qty=qty,

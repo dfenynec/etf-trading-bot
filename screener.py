@@ -49,8 +49,11 @@ ETF_CANDIDATES = [
     "GLD", "SLV", "USO", "UNG",
     # Bonds
     "TLT", "IEF", "HYG",
-    # International
-    "EFA", "EEM",
+    # International — global market ETFs (react to overnight news from home markets)
+    "EFA", "EEM",          # Broad: developed world, emerging markets
+    "EWJ", "EWG", "EWU",  # Country: Japan, Germany, UK
+    "FXI", "EWZ",          # Country: China, Brazil
+    "VEA",                  # Developed markets (ex-US, broad)
     # Industrials
     "XLI",
     # Communication

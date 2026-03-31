@@ -72,9 +72,15 @@ def run_etf_strategy() -> None:
     logger.info(f"ETF STRATEGY RUN — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     logger.info("=" * 70)
 
-    if not trader.is_market_open():
-        logger.info("Market is closed. Skipping ETF run.")
+    market_open     = trader.is_market_open()
+    extended_hours  = trader.is_extended_hours()
+
+    if not market_open and not extended_hours:
+        logger.info("Market is closed (outside regular + extended hours). Skipping ETF run.")
         return
+
+    if extended_hours and not market_open:
+        logger.info("Running in EXTENDED HOURS mode — limit orders, no bracket stops.")
 
     # Daily loss circuit breaker
     daily_pnl = trader.get_daily_pnl_pct()
@@ -181,7 +187,7 @@ def run_etf_strategy() -> None:
             continue
         logger.info(f"  → BUY  {qty}x {ticker} @ ~${price:.4f} | Stop: ${stop} | Score: {score} | Risk: {risk_pct*100:.2f}%")
 
-        if trader.buy(ticker, qty, stop_loss=stop):
+        if trader.buy(ticker, qty, stop_loss=stop, price=price):
             long_positions[ticker] = None
             buying_power -= cost
             log_trade("BUY", ticker, qty, price, score, stop,
@@ -211,7 +217,7 @@ def run_etf_strategy() -> None:
             continue
         logger.info(f"  → SHORT {qty}x {ticker} @ ~${price:.4f} | Stop: ${stop} | Score: {score} | Risk: {risk_pct*100:.2f}%")
 
-        if trader.short(ticker, qty, stop_loss=stop):
+        if trader.short(ticker, qty, stop_loss=stop, price=price):
             short_positions[ticker] = None
             buying_power -= cost
             log_trade("SHORT", ticker, qty, price, score, stop,
