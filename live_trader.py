@@ -691,57 +691,8 @@ class LiveCryptoTrader:
                     self._invalidate_pos_cache()
                     log_trade("SELL", symbol, 0, price, signal["score"], note="Signal exit")
 
-            elif not holding:
-                # Open new SHORT position — bet on continued decline
-                if not _pre_trade_checks():
-                    return
-
-                # BTC correlation filter (inverted for shorts — bearish BTC confirms short)
-                if BTC_CORRELATION_FILTER and symbol != "BTC/USD":
-                    btc_sig = self._get_btc_signal()
-                    if btc_sig and btc_sig["score"] >= 0:
-                        logger.info(
-                            f"[LIVE] Skip short {symbol}: BTC score {btc_sig['score']} "
-                            f"(BTC bullish — not a good time to short altcoins)"
-                        )
-                        return
-
-                portfolio_value = self.trader.get_portfolio_value()
-                crypto_bp       = self.trader.get_crypto_buying_power()
-                # Short stop is ABOVE entry — cap at STOP_LOSS_MAX_PCT
-                short_stop = min(price + 2 * atr, price * (1 + STOP_LOSS_MAX_PCT))
-                risk_pct   = self._get_kelly_risk()
-                qty = calculate_crypto_position_size(
-                    portfolio_value, price, short_stop,
-                    buying_power=crypto_bp * 0.98,
-                    risk_pct=risk_pct,
-                )
-
-                if qty <= 0:
-                    logger.info(f"[LIVE] Skip short {symbol}: not enough cash (bp=${crypto_bp:.2f})")
-                    return
-
-                logger.info(
-                    f"[LIVE] *** SHORT {symbol} | {qty:.6f} @ ${price:.4f} "
-                    f"| Stop: ${short_stop:.4f} | Score: {signal['score']} | Risk: {risk_pct*100:.2f}% ***"
-                )
-                if self.trader.sell_crypto_short(symbol, qty):
-                    self._last_traded[alpaca_sym] = time.time()
-                    self._entries[alpaca_sym] = {
-                        "side":         "short",
-                        "price":        price,
-                        "atr":          atr,
-                        "stop":         short_stop,
-                        "trough_price": price,
-                        "orig_qty":     qty,
-                        "pyramided":    True,   # no pyramid for shorts
-                        "trail_active": False,
-                    }
-                    self._invalidate_pos_cache()
-                    self._save_entries()
-                    reasons_str = " | ".join(signal.get("reasons", [])[:5])
-                    log_trade("SHORT", symbol, qty, price, signal["score"], short_stop,
-                              note=f"{signal.get('regime', '')} | {reasons_str}")
+            # Note: Alpaca does not support naked crypto short selling.
+            # SELL + not holding = no action for crypto.
 
     # ------------------------------------------------------------------
     # Entry point
