@@ -477,9 +477,14 @@ class LiveCryptoTrader:
     # ------------------------------------------------------------------
 
     async def on_bar(self, bar):
-        symbol = bar.symbol
-        # Only process top-ranked symbols (screener updates every 30 min)
-        if symbol not in self._active_symbols:
+        symbol     = bar.symbol
+        alpaca_sym = symbol.replace("/", "")
+        in_active  = symbol in self._active_symbols
+        is_held    = alpaca_sym in self._entries
+
+        # Only process bars for: (a) active trading symbols, OR (b) symbols we hold
+        # This ensures trailing stops fire even for symbols excluded from active trading (e.g. BTC)
+        if not in_active and not is_held:
             return
 
         # Background refresh if daily data is stale
@@ -489,13 +494,21 @@ class LiveCryptoTrader:
         # Inject real-time bar (close + intraday high/low)
         self._update_latest_bar(symbol, bar)
 
+        price = float(bar.close)
+
+        # For held-but-not-active symbols (e.g. BTC excluded from screener):
+        # only check exit conditions — skip signal generation and new buys/sells
+        if is_held and not in_active:
+            positions = self._get_cached_positions()
+            if alpaca_sym in positions:
+                self._check_exit_conditions(alpaca_sym, symbol, price)
+            return
+
         signal = self._get_signal(symbol)
         if not signal:
             return
 
-        price      = float(bar.close)
-        atr        = signal["atr"]
-        alpaca_sym = symbol.replace("/", "")
+        atr = signal["atr"]
 
         # Cached positions — 1 API call per POSITION_CACHE_TTL seconds
         positions        = self._get_cached_positions()
