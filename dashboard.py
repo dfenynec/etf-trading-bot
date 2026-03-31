@@ -14,6 +14,7 @@ from datetime import datetime
 from flask import Flask
 
 from performance import get_stats
+from config import TRAILING_STOP_PCT
 import db
 
 logger = logging.getLogger(__name__)
@@ -245,21 +246,26 @@ def index():
     if status["open_entries"]:
         entry_rows = ""
         for sym, e in status["open_entries"].items():
-            peak_pct = (e.get("peak_price", e["price"]) - e["price"]) / e["price"] * 100
-            trail_active = "✅" if e.get("trail_active") else "—"
+            entry_price  = e["price"]
+            peak_price   = e.get("peak_price", entry_price)
+            initial_stop = e.get("stop", 0)
+            trail_stop   = peak_price * (1 - TRAILING_STOP_PCT)
+            eff_stop     = max(initial_stop, trail_stop)
+            peak_pct     = (peak_price - entry_price) / entry_price * 100
+            stop_color   = "#2ecc71" if eff_stop > initial_stop else "#e67e22"
+            trail_label  = "✅ trailing" if eff_stop > initial_stop else "⚠️ initial"
             pyramided    = "✅" if e.get("pyramided") else "—"
             entry_rows += f"""<tr>
                 <td><b>{sym}</b></td>
-                <td>${e["price"]:.4f}</td>
-                <td>${e.get("stop",0):.4f}</td>
-                <td>${e.get("peak_price", e["price"]):.4f} ({peak_pct:+.1f}%)</td>
-                <td>{trail_active}</td>
+                <td>${entry_price:.4f}</td>
+                <td style="color:{stop_color}">${eff_stop:.4f} <small>({trail_label})</small></td>
+                <td>${peak_price:.4f} <small style="color:#2ecc71">({peak_pct:+.1f}%)</small></td>
                 <td>{pyramided}</td>
             </tr>"""
         entries_html = f"""
         <table>
             <thead><tr>
-                <th>Symbol</th><th>Entry</th><th>Stop</th><th>Peak</th><th>Trailing</th><th>Pyramided</th>
+                <th>Symbol</th><th>Entry</th><th>Effective Stop</th><th>Peak</th><th>Pyramided</th>
             </tr></thead>
             <tbody>{entry_rows}</tbody>
         </table>"""
