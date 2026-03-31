@@ -98,29 +98,41 @@ class LiveCryptoTrader:
     # ------------------------------------------------------------------
 
     def _load_entries(self) -> dict:
-        """Load open position entries from disk. Returns empty dict if file missing."""
-        if not os.path.exists(ENTRIES_FILE):
-            return {}
-        try:
-            with open(ENTRIES_FILE) as f:
-                entries = json.load(f)
-            if entries:
-                logger.info(
-                    f"[LIVE] Restored {len(entries)} open entries from disk: "
-                    f"{list(entries.keys())}"
-                )
+        """Load open entries from DB (primary) or JSON file (fallback)."""
+        import db as _db
+        entries = _db.load_all_entries()
+        if entries:
             return entries
-        except Exception as e:
-            logger.error(f"[LIVE] Failed to load entries: {e}")
-            return {}
+        # Fallback: JSON file from previous version
+        if os.path.exists(ENTRIES_FILE):
+            try:
+                with open(ENTRIES_FILE) as f:
+                    entries = json.load(f)
+                if entries:
+                    logger.info(f"[LIVE] Restored {len(entries)} entries from JSON fallback")
+                return entries
+            except Exception as e:
+                logger.error(f"[LIVE] JSON fallback load failed: {e}")
+        return {}
 
     def _save_entries(self) -> None:
-        """Persist current entries to disk. Called after every open/close."""
+        """Persist all current entries to DB. Also write JSON as backup."""
+        import db as _db
+        for sym, entry in self._entries.items():
+            _db.save_entry(sym, entry)
+        # JSON backup
         try:
             with open(ENTRIES_FILE, "w") as f:
                 json.dump(self._entries, f, indent=2)
         except Exception as e:
-            logger.error(f"[LIVE] Failed to save entries: {e}")
+            logger.error(f"[LIVE] JSON backup write failed: {e}")
+
+    def _delete_entry(self, alpaca_sym: str) -> None:
+        """Remove a closed position from DB and local dict."""
+        import db as _db
+        self._entries.pop(alpaca_sym, None)
+        _db.delete_entry(alpaca_sym)
+        self._save_entries()
 
     def _recover_untracked_positions(self) -> None:
         """
@@ -401,7 +413,7 @@ class LiveCryptoTrader:
                 f"pnl={pnl_pct:+.2f}%) ***"
             )
             if self.trader.sell_crypto(alpaca_sym):
-                self._entries.pop(alpaca_sym, None)
+                self._delete_entry(alpaca_sym)
                 self._last_traded[alpaca_sym] = time.time()
                 self._invalidate_pos_cache()
                 log_trade("CLOSE", symbol, 0, price, 0,
@@ -541,9 +553,8 @@ class LiveCryptoTrader:
             logger.info(f"[LIVE] *** SELL {symbol} @ ${price:.4f} | Score: {signal['score']} ***")
             if self.trader.sell_crypto(alpaca_sym):
                 self._last_traded[alpaca_sym] = time.time()
-                self._entries.pop(alpaca_sym, None)
+                self._delete_entry(alpaca_sym)
                 self._invalidate_pos_cache()
-                self._save_entries()
                 log_trade("SELL", symbol, 0, price, signal["score"], note="Signal exit")
 
     # ------------------------------------------------------------------

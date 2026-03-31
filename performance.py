@@ -26,6 +26,15 @@ def _parse_pnl(note: str) -> float | None:
 
 
 def get_stats() -> dict:
+    """Try DB first, fall back to CSV."""
+    import db as _db
+    db_stats = _db.get_performance_stats()
+    if db_stats:
+        return db_stats
+    return _get_stats_from_csv()
+
+
+def _get_stats_from_csv() -> dict:
     """
     Read trade_journal.csv and return a performance summary dict.
 

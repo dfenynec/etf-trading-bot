@@ -14,6 +14,7 @@ from datetime import datetime
 from flask import Flask
 
 from performance import get_stats
+import db
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +73,11 @@ def _positions_data() -> list:
 
 
 def _recent_trades(n: int = 30) -> list:
+    # Try DB first
+    rows = db.get_trades(n)
+    if rows:
+        return rows
+    # Fallback: CSV
     journal = "trade_journal.csv"
     if not os.path.exists(journal):
         return []

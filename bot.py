@@ -30,6 +30,7 @@ from trader import AlpacaTrader
 from live_trader import LiveCryptoTrader
 from trade_journal import log_trade
 from dashboard import start_dashboard
+import db
 
 # --- Logging setup ---
 logging.basicConfig(
@@ -205,6 +206,7 @@ def run_etf_strategy() -> None:
 
 def main() -> None:
     from screener import ETF_CANDIDATES, CRYPTO_CANDIDATES
+    db.init_db()
     logger.info("Trading bot starting up...")
     logger.info(f"ETF candidates: {len(ETF_CANDIDATES)} → screened to top {SCREEN_TOP_N_ETF} by momentum each run")
     logger.info(f"Crypto candidates: {len(CRYPTO_CANDIDATES)} → screened to top {SCREEN_TOP_N_CRYPTO} by momentum")

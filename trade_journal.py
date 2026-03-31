@@ -1,11 +1,14 @@
 """
-Trade Journal — logs every trade to a CSV file for performance analysis.
-Records: timestamp, action, symbol, qty, price, score, stop, take_profit, note.
+Trade Journal — logs every trade to PostgreSQL (primary) and CSV (backup).
+Records: timestamp, action, symbol, qty, price, score, stop, take_profit, note, pnl_pct.
 """
 import csv
 import logging
 import os
+import re
 from datetime import datetime
+
+import db
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +22,11 @@ def _ensure_header() -> None:
             csv.DictWriter(f, fieldnames=_COLUMNS).writeheader()
 
 
+def _parse_pnl(note: str) -> float | None:
+    match = re.search(r"pnl=([+-]?\d+\.?\d*)%", note)
+    return float(match.group(1)) if match else None
+
+
 def log_trade(
     action: str,
     symbol: str,
@@ -29,19 +37,13 @@ def log_trade(
     take_profit: float = None,
     note: str = "",
 ) -> None:
-    """
-    Append one trade row to trade_journal.csv.
+    pnl_pct = _parse_pnl(note) if action == "CLOSE" else None
 
-    Args:
-        action:      "BUY" | "SELL" | "SHORT" | "COVER"
-        symbol:      Ticker or crypto pair
-        qty:         Number of shares / units
-        price:       Execution price
-        score:       Indicator score at trade time
-        stop:        Stop-loss price (bracket order)
-        take_profit: Take-profit price (bracket order)
-        note:        Free-text note (e.g. "Stop-loss hit", "Signal exit")
-    """
+    # --- Primary: PostgreSQL ---
+    db.insert_trade(action, symbol, float(qty), float(price),
+                    score, stop, take_profit, note, pnl_pct)
+
+    # --- Backup: CSV ---
     _ensure_header()
     row = {
         "timestamp":   datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -57,6 +59,7 @@ def log_trade(
     try:
         with open(JOURNAL_FILE, "a", newline="") as f:
             csv.DictWriter(f, fieldnames=_COLUMNS).writerow(row)
-        logger.info(f"[JOURNAL] {action:<6} {symbol:<10} qty={qty:.4f} @ ${price:.4f}  score={score}  {note}")
     except Exception as e:
-        logger.error(f"[JOURNAL] Failed to write trade: {e}")
+        logger.error(f"[JOURNAL] CSV write failed: {e}")
+
+    logger.info(f"[JOURNAL] {action:<6} {symbol:<10} qty={qty:.4f} @ ${price:.4f}  score={score}  {note}")
