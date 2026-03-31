@@ -120,9 +120,7 @@ def run_etf_strategy() -> None:
             if signal["signal"] == "BUY" and not daily_uptrend:
                 signal["signal"] = "HOLD"
                 signal["reasons"].insert(0, "Macro filter: below daily SMA50 — suppressed BUY")
-            elif signal["signal"] == "SELL" and daily_uptrend:
-                signal["signal"] = "HOLD"
-                signal["reasons"].insert(0, "Macro filter: above daily SMA50 — suppressed SHORT")
+            # SELL/SHORT signals are never suppressed by macro filter — shorts work in any trend
 
         signals.append(signal)
 

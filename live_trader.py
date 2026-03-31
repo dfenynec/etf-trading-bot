@@ -254,15 +254,13 @@ class LiveCryptoTrader:
             return None
         signal = score_etf(df_ind, symbol)
 
-        # Macro filter: only trade in the direction of the daily trend
+        # Macro filter: suppress BUY signals when daily trend is down
+        # SELL signals (exit long / open short) are never suppressed — exits should always fire
         uptrend = self._is_daily_uptrend(symbol)
         if uptrend is not None:
             if signal["signal"] == "BUY" and not uptrend:
                 signal["signal"] = "HOLD"
                 signal["reasons"].insert(0, "Macro: below daily SMA50")
-            elif signal["signal"] == "SELL" and uptrend:
-                signal["signal"] = "HOLD"
-                signal["reasons"].insert(0, "Macro: above daily SMA50")
 
         return signal
 
