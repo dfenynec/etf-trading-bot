@@ -45,8 +45,8 @@ ETF_CANDIDATES = [
     "VNQ",
     # Utilities
     "XLU",
-    # Commodities
-    "GLD", "SLV",
+    # Commodities — gold, silver, oil, gas
+    "GLD", "SLV", "USO", "UNG",
     # Bonds
     "TLT", "IEF", "HYG",
     # International
@@ -61,19 +61,23 @@ ETF_CANDIDATES = [
     "VUG", "VTV",
 ]
 
+# BTC/USD is intentionally excluded from active trading — it's used only as
+# a correlation filter in live_trader.py. Its lower % volatility and high
+# market efficiency make it a worse candidate than mid-cap alts for a small
+# account. We watch it via the BTC filter instead.
 CRYPTO_CANDIDATES = [
-    # Large caps — high liquidity, tight spreads
-    "BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "DOGE/USD",
-    # Layer-1 / smart contract
-    "AVAX/USD", "ADA/USD", "DOT/USD", "ALGO/USD", "NEAR/USD",
-    # DeFi blue chips
-    "LINK/USD", "AAVE/USD", "CRV/USD",
-    # Store-of-value / payment
+    # Mid/large cap — high % volatility, good for momentum strategies
+    "ETH/USD", "SOL/USD", "XRP/USD", "DOGE/USD", "AVAX/USD",
+    # Layer-1 smart contract platforms
+    "ADA/USD", "ALGO/USD", "NEAR/USD", "HBAR/USD",
+    # DeFi / infrastructure
+    "LINK/USD", "AAVE/USD", "ATOM/USD",
+    # Payments / store of value
     "LTC/USD", "BCH/USD",
-    # Infrastructure
-    "ATOM/USD",
-    # Additional liquid pairs
-    "SHIB/USD", "WIF/USD",
+    # High momentum / newer
+    "SUI/USD", "WIF/USD", "SHIB/USD",
+    # BTC kept for correlation filter — fetched separately in live_trader.py
+    "BTC/USD",
 ]
 
 

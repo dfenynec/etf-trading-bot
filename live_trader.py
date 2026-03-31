@@ -185,7 +185,8 @@ class LiveCryptoTrader:
             with self._lock:
                 self._base_data = fresh
             # Re-rank and update the active trading set
-            ranked = screen_crypto(fresh)
+            # BTC/USD excluded from trading — kept only as correlation filter
+            ranked = [s for s in screen_crypto(fresh) if s != "BTC/USD"]
             self._active_symbols = set(ranked)
             self._last_refresh = time.time()
             logger.info(f"[LIVE] Base data ready. Active symbols: {ranked}")
