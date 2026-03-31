@@ -108,8 +108,11 @@ def run_etf_strategy() -> None:
 
     # Hourly bars → primary signal source (responsive, intraday)
     # Daily bars  → macro trend filter (is the asset in a long-term uptrend?)
+    logger.info(f"[ETF] Fetching 15-min data for {len(universe)} tickers...")
     all_data_hourly = fetch_all_etfs_hourly(universe)
+    logger.info(f"[ETF] Got 15-min data for {len(all_data_hourly)}/{len(universe)} tickers")
     all_data_daily  = fetch_all_etfs(universe)
+    logger.info(f"[ETF] Got daily data for {len(all_data_daily)}/{len(universe)} tickers")
 
     signals = []
     for ticker, df_h in all_data_hourly.items():
@@ -253,8 +256,14 @@ def main() -> None:
     start_dashboard(trader, live)
 
     # --- Run ETF strategy immediately, then on schedule ---
-    run_etf_strategy()
-    schedule.every(RUN_INTERVAL_MINUTES).minutes.do(run_etf_strategy)
+    def safe_etf_run():
+        try:
+            run_etf_strategy()
+        except Exception as e:
+            logger.error(f"[ETF] Strategy run crashed: {e}", exc_info=True)
+
+    safe_etf_run()
+    schedule.every(RUN_INTERVAL_MINUTES).minutes.do(safe_etf_run)
 
     while True:
         schedule.run_pending()
