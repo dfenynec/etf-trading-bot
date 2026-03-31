@@ -254,13 +254,38 @@ class AlpacaTrader:
             return False
 
     def sell_crypto(self, symbol: str) -> bool:
-        """Close entire crypto position."""
+        """Close entire long crypto position."""
         try:
             self.client.close_position(symbol)
             logger.info(f"CRYPTO SELL: Closed full position in {symbol}")
             return True
         except Exception as e:
             logger.error(f"CRYPTO SELL failed for {symbol}: {e}")
+            return False
+
+    def sell_crypto_short(self, symbol: str, qty: float) -> bool:
+        """Open a short crypto position (sell what we don't own)."""
+        try:
+            result = self.client.submit_order(MarketOrderRequest(
+                symbol=symbol,
+                qty=round(qty, 6),
+                side=OrderSide.SELL,
+                time_in_force=TimeInForce.GTC,
+            ))
+            logger.info(f"CRYPTO SHORT submitted: {qty:.6f}x {symbol} | ID: {result.id}")
+            return True
+        except Exception as e:
+            logger.error(f"CRYPTO SHORT failed for {symbol}: {e}")
+            return False
+
+    def cover_crypto(self, symbol: str) -> bool:
+        """Close a short crypto position (buy to cover)."""
+        try:
+            self.client.close_position(symbol)
+            logger.info(f"CRYPTO COVER: Closed short position in {symbol}")
+            return True
+        except Exception as e:
+            logger.error(f"CRYPTO COVER failed for {symbol}: {e}")
             return False
 
     def close_all_positions(self) -> None:

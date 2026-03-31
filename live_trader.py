@@ -35,6 +35,7 @@ from config import (
     BTC_CORRELATION_FILTER, POSITION_CACHE_TTL,
     PYRAMID_TRIGGER_PCT, PYRAMID_ADD_PCT,
     LOSS_THROTTLE_AFTER, RISK_PER_TRADE_PCT,
+    STOP_LOSS_MAX_PCT,
 )
 from screener import CRYPTO_CANDIDATES, screen_crypto
 from data_fetcher import fetch_all_crypto, fetch_all_crypto_hourly
@@ -150,22 +151,37 @@ class LiveCryptoTrader:
                 if alpaca_sym in self._entries:
                     continue  # Already tracked
 
-                entry_price = float(pos.avg_entry_price)
-                qty         = float(pos.qty)
-                stop        = round(entry_price * 0.96, 6)  # 4% below entry
+                entry_price   = float(pos.avg_entry_price)
+                qty           = float(pos.qty)
+                current_price = float(pos.current_price) if pos.current_price else entry_price
 
-                self._entries[alpaca_sym] = {
-                    "price":       entry_price,
-                    "atr":         entry_price * 0.02,   # estimate 2% ATR
-                    "stop":        stop,
-                    "peak_price":  float(pos.current_price) if pos.current_price else entry_price,
-                    "orig_qty":    qty,
-                    "pyramided":   True,   # Don't pyramid — we don't know trade history
-                    "trail_active": False,
-                }
+                if qty < 0:  # Short position
+                    stop = round(entry_price * (1 + 0.04), 6)  # 4% above entry
+                    self._entries[alpaca_sym] = {
+                        "side":         "short",
+                        "price":        entry_price,
+                        "atr":          entry_price * 0.02,
+                        "stop":         stop,
+                        "trough_price": current_price,
+                        "orig_qty":     abs(qty),
+                        "pyramided":    True,
+                        "trail_active": False,
+                    }
+                else:  # Long position
+                    stop = round(entry_price * 0.96, 6)  # 4% below entry
+                    self._entries[alpaca_sym] = {
+                        "side":        "long",
+                        "price":       entry_price,
+                        "atr":         entry_price * 0.02,
+                        "stop":        stop,
+                        "peak_price":  current_price,
+                        "orig_qty":    qty,
+                        "pyramided":   True,
+                        "trail_active": False,
+                    }
                 logger.warning(
-                    f"[LIVE] Recovered untracked position: {alpaca_sym} "
-                    f"entry=${entry_price:.4f} stop=${stop:.4f} qty={qty}"
+                    f"[LIVE] Recovered untracked {'short' if qty < 0 else 'long'}: {alpaca_sym} "
+                    f"entry=${entry_price:.4f} stop=${stop:.4f} qty={abs(qty):.6f}"
                 )
             if self._entries:
                 self._save_entries()
@@ -315,10 +331,10 @@ class LiveCryptoTrader:
                 df = self._base_data.get(slash_sym)
             exit_price = float(df["close"].iloc[-1]) if df is not None and not df.empty else 0.0
 
-            pnl_pct = (
-                (exit_price - entry["price"]) / entry["price"] * 100
-                if entry["price"] > 0 else 0.0
-            )
+            if entry.get("side") == "short":
+                pnl_pct = (entry["price"] - exit_price) / entry["price"] * 100 if entry["price"] > 0 else 0.0
+            else:
+                pnl_pct = (exit_price - entry["price"]) / entry["price"] * 100 if entry["price"] > 0 else 0.0
             result = "TP hit" if pnl_pct > 0 else "SL hit"
 
             logger.info(
@@ -396,6 +412,54 @@ class LiveCryptoTrader:
         if not entry:
             return False
 
+        # ── SHORT exit logic ──────────────────────────────────────────────────
+        if entry.get("side") == "short":
+            trough = entry.get("trough_price", entry["price"])
+            if price < trough:
+                entry["trough_price"] = price
+                trough = price
+
+            trailing_stop  = trough * (1 + TRAILING_STOP_PCT)
+            effective_stop = min(entry["stop"], trailing_stop)
+
+            if trailing_stop < entry["stop"] and not entry.get("trail_active"):
+                entry["trail_active"] = True
+                gain_pct = (entry["price"] - trough) / entry["price"] * 100
+                logger.info(
+                    f"[LIVE] Trailing stop active (SHORT): {symbol} "
+                    f"trough=${trough:.4f} (+{gain_pct:.1f}%) → trail=${trailing_stop:.4f}"
+                )
+
+            if price >= effective_stop:
+                pnl_pct = (entry["price"] - price) / entry["price"] * 100
+                reason  = "Trail stop" if trailing_stop < entry["stop"] else "Initial stop"
+                logger.info(
+                    f"[LIVE] *** {reason.upper()} HIT SHORT {symbol} @ ${price:.4f} "
+                    f"(stop=${effective_stop:.4f} | trough=${trough:.4f} | pnl={pnl_pct:+.2f}%) ***"
+                )
+                if self.trader.cover_crypto(alpaca_sym):
+                    self._delete_entry(alpaca_sym)
+                    self._last_traded[alpaca_sym] = time.time()
+                    self._invalidate_pos_cache()
+                    log_trade("COVER", symbol, 0, price, 0,
+                              note=f"{reason} | entry=${entry['price']:.4f} | "
+                                   f"trough=${trough:.4f} | pnl={pnl_pct:+.2f}%")
+                    if pnl_pct > 0:
+                        self._consecutive_losses = 0
+                        self._loss_multiplier    = 1.0
+                        logger.info(f"[KELLY] Win (short) — full sizing restored")
+                    else:
+                        self._consecutive_losses += 1
+                        if self._consecutive_losses >= LOSS_THROTTLE_AFTER:
+                            self._loss_multiplier = 0.5
+                            logger.warning(
+                                f"[KELLY] {self._consecutive_losses} consecutive losses — size halved"
+                            )
+                    self._save_entries()
+                return True
+            return False
+
+        # ── LONG exit logic ───────────────────────────────────────────────────
         # --- Update running peak ---
         if price > entry["peak_price"]:
             entry["peak_price"] = price
@@ -512,14 +576,17 @@ class LiveCryptoTrader:
         positions        = self._get_cached_positions()
         holding          = alpaca_sym in positions
         crypto_positions = {k: v for k, v in positions.items() if k in _ALPACA_CRYPTO_SYMS}
+        entry_side       = self._entries.get(alpaca_sym, {}).get("side", "long")
+        holding_long     = holding and entry_side == "long"
+        holding_short    = holding and entry_side == "short"
 
         logger.info(
             f"[LIVE] {symbol:<10} ${price:>10.4f}  "
             f"score: {signal['score']:+d}  signal: {signal['signal']:<5}  "
-            f"holding: {holding}"
+            f"holding: {'short' if holding_short else 'long' if holding_long else False}"
         )
 
-        # Manual stop / TP / breakeven check for open positions
+        # Manual trailing stop check for open positions
         if holding:
             if self._check_exit_conditions(alpaca_sym, symbol, price):
                 return  # Position was closed — skip buy/sell logic below
@@ -528,90 +595,153 @@ class LiveCryptoTrader:
         if time.time() - self._last_traded.get(alpaca_sym, 0) < TRADE_COOLDOWN:
             return
 
-        # ---- BUY --------------------------------------------------------
-        if signal["signal"] == "BUY" and not holding:
-
-            # Daily loss circuit breaker
+        # Shared pre-trade checks (used by both BUY long and SELL short)
+        def _pre_trade_checks() -> bool:
             if self._check_daily_halt():
-                return
-
-            # Learned blacklist — skip symbols that consistently lose
+                return False
             if is_symbol_blacklisted(symbol):
-                logger.info(f"[LIVE] Skip {symbol}: blacklisted by learner (poor win rate)")
-                return
-
-            # Time-of-day filter — skip statistically bad hours (learned from history)
+                logger.info(f"[LIVE] Skip {symbol}: blacklisted by learner")
+                return False
             from learner import get_weights as _get_weights
-            _bad_hours = _get_weights().get("bad_hours_utc", [])
-            _current_hour = time.gmtime().tm_hour
-            if _current_hour in _bad_hours:
-                logger.info(
-                    f"[LIVE] Skip {symbol}: UTC hour {_current_hour:02d}:00 "
-                    f"flagged as low win-rate by learner"
-                )
-                return
-
-            # BTC correlation filter — don't buy altcoins in a BTC downtrend
-            if BTC_CORRELATION_FILTER and symbol != "BTC/USD":
-                btc_sig = self._get_btc_signal()
-                if btc_sig and btc_sig["score"] < 0:
-                    logger.info(
-                        f"[LIVE] Skip {symbol}: BTC score {btc_sig['score']} "
-                        f"(correlation filter active)"
-                    )
-                    return
-
+            bad_hours = _get_weights().get("bad_hours_utc", [])
+            if time.gmtime().tm_hour in bad_hours:
+                logger.info(f"[LIVE] Skip {symbol}: bad hour (learner filter)")
+                return False
             if len(crypto_positions) >= MAX_CRYPTO_POSITIONS:
                 logger.info(f"[LIVE] Skip {symbol}: at max positions ({MAX_CRYPTO_POSITIONS})")
-                return
+                return False
+            return True
 
-            portfolio_value = self.trader.get_portfolio_value()
-            crypto_bp       = self.trader.get_crypto_buying_power()
-            stop = calculate_stop_loss(price, atr)
-            tp   = calculate_take_profit(price, atr)
+        # ---- BUY signal -------------------------------------------------
+        if signal["signal"] == "BUY":
 
-            # Kelly-adjusted risk % (halved after consecutive losses)
-            risk_pct = self._get_kelly_risk()
-            qty = calculate_crypto_position_size(
-                portfolio_value, price, stop,
-                buying_power=crypto_bp * 0.98,
-                risk_pct=risk_pct,
-            )
+            if holding_short:
+                # Cover the short — BUY signal means downtrend is reversing
+                entry = self._entries.get(alpaca_sym, {})
+                pnl_pct = (entry.get("price", price) - price) / entry.get("price", price) * 100
+                logger.info(f"[LIVE] *** COVER {symbol} @ ${price:.4f} | pnl={pnl_pct:+.2f}% | Score: {signal['score']} ***")
+                if self.trader.cover_crypto(alpaca_sym):
+                    self._last_traded[alpaca_sym] = time.time()
+                    self._delete_entry(alpaca_sym)
+                    self._invalidate_pos_cache()
+                    log_trade("COVER", symbol, 0, price, signal["score"],
+                              note=f"Signal exit | pnl={pnl_pct:+.2f}%")
 
-            if qty <= 0:
-                logger.info(f"[LIVE] Skip {symbol}: not enough cash (bp=${crypto_bp:.2f})")
-                return
+            elif not holding:
+                # Open new LONG position
+                if not _pre_trade_checks():
+                    return
 
-            logger.info(
-                f"[LIVE] *** BUY  {symbol} | {qty:.6f} @ ${price:.4f} "
-                f"| Stop: ${stop} | Score: {signal['score']} "
-                f"| Risk: {risk_pct*100:.2f}% ***"
-            )
-            if self.trader.buy_crypto(symbol, qty, stop_loss=stop, take_profit=tp):
-                self._last_traded[alpaca_sym] = time.time()
-                self._entries[alpaca_sym]     = {
-                    "price": price, "atr": atr,
-                    "stop": stop,           # initial hard floor (entry - 2×ATR, max -4%)
-                    "peak_price": price,    # tracks highest price seen since entry
-                    "orig_qty": qty,        # used to size the pyramid add-on
-                    "pyramided": False,     # True after pyramid add executed
-                    "trail_active": False,  # flips True once trail exceeds initial stop
-                }
-                self._invalidate_pos_cache()
-                self._save_entries()
-                # Log reasons so the learner can trace which indicators fired
-                reasons_str = " | ".join(signal.get("reasons", [])[:5])
-                log_trade("BUY", symbol, qty, price, signal["score"], stop, tp,
-                          note=f"{signal.get('regime', '')} | {reasons_str}")
+                # BTC correlation filter — don't buy altcoins in a BTC downtrend
+                if BTC_CORRELATION_FILTER and symbol != "BTC/USD":
+                    btc_sig = self._get_btc_signal()
+                    if btc_sig and btc_sig["score"] < 0:
+                        logger.info(
+                            f"[LIVE] Skip long {symbol}: BTC score {btc_sig['score']} "
+                            f"(correlation filter)"
+                        )
+                        return
 
-        # ---- SELL -------------------------------------------------------
-        elif signal["signal"] == "SELL" and holding:
-            logger.info(f"[LIVE] *** SELL {symbol} @ ${price:.4f} | Score: {signal['score']} ***")
-            if self.trader.sell_crypto(alpaca_sym):
-                self._last_traded[alpaca_sym] = time.time()
-                self._delete_entry(alpaca_sym)
-                self._invalidate_pos_cache()
-                log_trade("SELL", symbol, 0, price, signal["score"], note="Signal exit")
+                portfolio_value = self.trader.get_portfolio_value()
+                crypto_bp       = self.trader.get_crypto_buying_power()
+                stop = calculate_stop_loss(price, atr)
+                tp   = calculate_take_profit(price, atr)
+                risk_pct = self._get_kelly_risk()
+                qty = calculate_crypto_position_size(
+                    portfolio_value, price, stop,
+                    buying_power=crypto_bp * 0.98,
+                    risk_pct=risk_pct,
+                )
+
+                if qty <= 0:
+                    logger.info(f"[LIVE] Skip long {symbol}: not enough cash (bp=${crypto_bp:.2f})")
+                    return
+
+                logger.info(
+                    f"[LIVE] *** BUY  {symbol} | {qty:.6f} @ ${price:.4f} "
+                    f"| Stop: ${stop} | Score: {signal['score']} | Risk: {risk_pct*100:.2f}% ***"
+                )
+                if self.trader.buy_crypto(symbol, qty, stop_loss=stop, take_profit=tp):
+                    self._last_traded[alpaca_sym] = time.time()
+                    self._entries[alpaca_sym] = {
+                        "side":         "long",
+                        "price":        price,
+                        "atr":          atr,
+                        "stop":         stop,
+                        "peak_price":   price,
+                        "orig_qty":     qty,
+                        "pyramided":    False,
+                        "trail_active": False,
+                    }
+                    self._invalidate_pos_cache()
+                    self._save_entries()
+                    reasons_str = " | ".join(signal.get("reasons", [])[:5])
+                    log_trade("BUY", symbol, qty, price, signal["score"], stop, tp,
+                              note=f"{signal.get('regime', '')} | {reasons_str}")
+
+        # ---- SELL signal ------------------------------------------------
+        elif signal["signal"] == "SELL":
+
+            if holding_long:
+                # Close the long — SELL signal means uptrend is reversing
+                logger.info(f"[LIVE] *** SELL {symbol} @ ${price:.4f} | Score: {signal['score']} ***")
+                if self.trader.sell_crypto(alpaca_sym):
+                    self._last_traded[alpaca_sym] = time.time()
+                    self._delete_entry(alpaca_sym)
+                    self._invalidate_pos_cache()
+                    log_trade("SELL", symbol, 0, price, signal["score"], note="Signal exit")
+
+            elif not holding:
+                # Open new SHORT position — bet on continued decline
+                if not _pre_trade_checks():
+                    return
+
+                # BTC correlation filter (inverted for shorts — bearish BTC confirms short)
+                if BTC_CORRELATION_FILTER and symbol != "BTC/USD":
+                    btc_sig = self._get_btc_signal()
+                    if btc_sig and btc_sig["score"] >= 0:
+                        logger.info(
+                            f"[LIVE] Skip short {symbol}: BTC score {btc_sig['score']} "
+                            f"(BTC bullish — not a good time to short altcoins)"
+                        )
+                        return
+
+                portfolio_value = self.trader.get_portfolio_value()
+                crypto_bp       = self.trader.get_crypto_buying_power()
+                # Short stop is ABOVE entry — cap at STOP_LOSS_MAX_PCT
+                short_stop = min(price + 2 * atr, price * (1 + STOP_LOSS_MAX_PCT))
+                risk_pct   = self._get_kelly_risk()
+                qty = calculate_crypto_position_size(
+                    portfolio_value, price, short_stop,
+                    buying_power=crypto_bp * 0.98,
+                    risk_pct=risk_pct,
+                )
+
+                if qty <= 0:
+                    logger.info(f"[LIVE] Skip short {symbol}: not enough cash (bp=${crypto_bp:.2f})")
+                    return
+
+                logger.info(
+                    f"[LIVE] *** SHORT {symbol} | {qty:.6f} @ ${price:.4f} "
+                    f"| Stop: ${short_stop:.4f} | Score: {signal['score']} | Risk: {risk_pct*100:.2f}% ***"
+                )
+                if self.trader.sell_crypto_short(symbol, qty):
+                    self._last_traded[alpaca_sym] = time.time()
+                    self._entries[alpaca_sym] = {
+                        "side":         "short",
+                        "price":        price,
+                        "atr":          atr,
+                        "stop":         short_stop,
+                        "trough_price": price,
+                        "orig_qty":     qty,
+                        "pyramided":    True,   # no pyramid for shorts
+                        "trail_active": False,
+                    }
+                    self._invalidate_pos_cache()
+                    self._save_entries()
+                    reasons_str = " | ".join(signal.get("reasons", [])[:5])
+                    log_trade("SHORT", symbol, qty, price, signal["score"], short_stop,
+                              note=f"{signal.get('regime', '')} | {reasons_str}")
 
     # ------------------------------------------------------------------
     # Entry point
