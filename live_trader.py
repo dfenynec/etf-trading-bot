@@ -419,6 +419,27 @@ class LiveCryptoTrader:
                 entry["trough_price"] = price
                 trough = price
 
+            # --- Take-profit target hit (short TP is below entry) ---
+            tp = entry.get("tp")
+            if tp and price <= tp:
+                pnl_pct = (entry["price"] - price) / entry["price"] * 100
+                logger.info(
+                    f"[LIVE] *** TAKE PROFIT HIT SHORT {symbol} @ ${price:.4f} "
+                    f"(target=${tp:.4f} | entry=${entry['price']:.4f} | pnl={pnl_pct:+.2f}%) ***"
+                )
+                if self.trader.cover_crypto(alpaca_sym):
+                    self._delete_entry(alpaca_sym)
+                    self._last_traded[alpaca_sym] = time.time()
+                    self._invalidate_pos_cache()
+                    log_trade("COVER", symbol, 0, price, 0,
+                              note=f"TP hit (short) | entry=${entry['price']:.4f} | "
+                                   f"target=${tp:.4f} | pnl={pnl_pct:+.2f}%")
+                    self._consecutive_losses = 0
+                    self._loss_multiplier    = 1.0
+                    logger.info(f"[KELLY] Win (short TP) — full position sizing restored")
+                    self._save_entries()
+                return True
+
             trailing_stop  = trough * (1 + TRAILING_STOP_PCT)
             effective_stop = min(entry["stop"], trailing_stop)
 
@@ -463,6 +484,27 @@ class LiveCryptoTrader:
         # --- Update running peak ---
         if price > entry["peak_price"]:
             entry["peak_price"] = price
+
+        # --- Take-profit target hit ---
+        tp = entry.get("tp")
+        if tp and price >= tp:
+            pnl_pct = (price - entry["price"]) / entry["price"] * 100
+            logger.info(
+                f"[LIVE] *** TAKE PROFIT HIT {symbol} @ ${price:.4f} "
+                f"(target=${tp:.4f} | entry=${entry['price']:.4f} | pnl={pnl_pct:+.2f}%) ***"
+            )
+            if self.trader.sell_crypto(alpaca_sym):
+                self._delete_entry(alpaca_sym)
+                self._last_traded[alpaca_sym] = time.time()
+                self._invalidate_pos_cache()
+                log_trade("CLOSE", symbol, 0, price, 0,
+                          note=f"TP hit | entry=${entry['price']:.4f} | "
+                               f"target=${tp:.4f} | pnl={pnl_pct:+.2f}%")
+                self._consecutive_losses = 0
+                self._loss_multiplier    = 1.0
+                logger.info(f"[KELLY] Win (TP) — full position sizing restored")
+                self._save_entries()
+            return True
 
         # --- Pyramiding: add to winner once it's up PYRAMID_TRIGGER_PCT ---
         if not entry.get("pyramided") and entry["orig_qty"] > 0:
@@ -668,6 +710,7 @@ class LiveCryptoTrader:
                         "price":        price,
                         "atr":          atr,
                         "stop":         stop,
+                        "tp":           tp,
                         "peak_price":   price,
                         "orig_qty":     qty,
                         "pyramided":    False,
