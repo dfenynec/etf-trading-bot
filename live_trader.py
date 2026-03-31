@@ -122,6 +122,43 @@ class LiveCryptoTrader:
         except Exception as e:
             logger.error(f"[LIVE] Failed to save entries: {e}")
 
+    def _recover_untracked_positions(self) -> None:
+        """
+        On startup, check Alpaca for any open crypto positions that are NOT
+        in _entries (e.g. bot restarted after a buy). For each untracked
+        position, create a default entry using the Alpaca avg_entry_price and
+        a 4% initial stop — so the trailing stop system immediately protects it.
+        """
+        try:
+            positions = self.trader.get_positions()
+            for alpaca_sym, pos in positions.items():
+                if alpaca_sym not in _ALPACA_CRYPTO_SYMS:
+                    continue  # Skip ETFs
+                if alpaca_sym in self._entries:
+                    continue  # Already tracked
+
+                entry_price = float(pos.avg_entry_price)
+                qty         = float(pos.qty)
+                stop        = round(entry_price * 0.96, 6)  # 4% below entry
+
+                self._entries[alpaca_sym] = {
+                    "price":       entry_price,
+                    "atr":         entry_price * 0.02,   # estimate 2% ATR
+                    "stop":        stop,
+                    "peak_price":  float(pos.current_price) if pos.current_price else entry_price,
+                    "orig_qty":    qty,
+                    "pyramided":   True,   # Don't pyramid — we don't know trade history
+                    "trail_active": False,
+                }
+                logger.warning(
+                    f"[LIVE] Recovered untracked position: {alpaca_sym} "
+                    f"entry=${entry_price:.4f} stop=${stop:.4f} qty={qty}"
+                )
+            if self._entries:
+                self._save_entries()
+        except Exception as e:
+            logger.error(f"[LIVE] Position recovery failed: {e}")
+
     # ------------------------------------------------------------------
     # Data management
     # ------------------------------------------------------------------
@@ -515,6 +552,7 @@ class LiveCryptoTrader:
 
     def run(self) -> None:
         self._refresh_base_data()
+        self._recover_untracked_positions()  # Restore stops for positions opened before restart
         print_learned_state()  # Show learned weights in Railway logs at startup
 
         # Subscribe to ALL candidates — on_bar filters to _active_symbols only
