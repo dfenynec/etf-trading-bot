@@ -48,8 +48,8 @@ from learner import is_symbol_blacklisted, print_learned_state
 
 logger = logging.getLogger(__name__)
 
-FULL_REFRESH_INTERVAL = 1800   # Refresh yfinance daily data every 30 min
-TRADE_COOLDOWN        = 300    # Min seconds between trades on same symbol
+FULL_REFRESH_INTERVAL = 900    # Refresh yfinance 15m data every 15 min
+TRADE_COOLDOWN        = 900    # Min seconds between trades on same symbol (1 full 15m bar)
 PNL_CHECK_INTERVAL    = 300    # Re-check daily P&L every 5 min
 ENTRIES_FILE          = "open_entries.json"  # Persists stop/trail data across redeploys
 

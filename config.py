@@ -43,8 +43,8 @@ TAKE_PROFIT_ATR_MULT = 3.0    # Take-profit = entry + 3 * ATR
 STOP_LOSS_MAX_PCT  = 0.04     # Stop never more than 4% below entry
 TAKE_PROFIT_MAX_PCT = 0.07    # Target never more than 7% above entry (achievable in calm markets)
 RISK_PER_TRADE_PCT = 0.01     # Risk exactly 1% of portfolio per trade (position sized by stop distance)
-MIN_BUY_SCORE = 4             # Minimum score to trigger a BUY (4+ indicators must agree)
-MIN_SELL_SCORE = -4           # Maximum score to trigger a SELL (tightened to match)
+MIN_BUY_SCORE = 3             # Minimum score to trigger a BUY (lower TF = more signals, daily filter handles noise)
+MIN_SELL_SCORE = -3           # Maximum score to trigger a SELL
 
 # --- Crypto risk settings (separate from ETF — crypto is more volatile) ---
 MAX_CRYPTO_POSITIONS = 2       # Max 2 concurrent crypto positions (limits correlated loss)

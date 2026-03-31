@@ -66,55 +66,55 @@ def fetch_all_crypto(symbols: list) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Hourly data (primary signal source — much more responsive than daily)
+# 15-minute data (primary signal source — responsive, high trade frequency)
 # ---------------------------------------------------------------------------
 
-def fetch_etf_data_hourly(ticker: str) -> pd.DataFrame:
+def fetch_etf_data_15min(ticker: str) -> pd.DataFrame:
     """
-    Fetch 1-hour OHLCV bars for a single ETF.
-    Uses period='60d' — gives ~390 hourly bars (60 days × 6.5 market hours).
-    That's enough for SMA200 and all other indicators.
+    Fetch 15-minute OHLCV bars for a single ETF.
+    period='60d' → ~1,560 bars (60 days × 6.5 market hours × 4 bars/hour).
+    More than enough for SMA200 and all indicators.
     """
     try:
-        df = yf.download(ticker, period="60d", interval="1h",
+        df = yf.download(ticker, period="60d", interval="15m",
                          progress=False, auto_adjust=True)
         df = _clean_df(df)
         if df.empty:
-            logger.warning(f"No hourly data for {ticker}")
+            logger.warning(f"No 15m data for {ticker}")
         else:
-            logger.debug(f"Fetched {len(df)} hourly bars for {ticker}")
+            logger.debug(f"Fetched {len(df)} 15m bars for {ticker}")
         return df
     except Exception as e:
-        logger.error(f"Error fetching hourly data for {ticker}: {e}")
+        logger.error(f"Error fetching 15m data for {ticker}: {e}")
         return pd.DataFrame()
 
 
 def fetch_all_etfs_hourly(tickers: list) -> dict:
-    """Fetch hourly data for all ETFs. Returns {ticker: DataFrame}."""
+    """Fetch 15-minute data for all ETFs. Returns {ticker: DataFrame}."""
     return {t: df for t in tickers
-            if not (df := fetch_etf_data_hourly(t)).empty}
+            if not (df := fetch_etf_data_15min(t)).empty}
 
 
 def fetch_crypto_data_hourly(symbol: str) -> pd.DataFrame:
     """
-    Fetch 1-hour OHLCV bars for a crypto pair.
-    Uses period='60d' — gives ~1440 hourly bars (60 days × 24h, 24/7 market).
+    Fetch 15-minute OHLCV bars for a crypto pair.
+    period='60d' → ~5,760 bars (60 days × 24h × 4 bars/hour).
     """
     yf_symbol = alpaca_to_yfinance(symbol)
     try:
-        df = yf.download(yf_symbol, period="60d", interval="1h",
+        df = yf.download(yf_symbol, period="60d", interval="15m",
                          progress=False, auto_adjust=True)
         df = _clean_df(df)
         if df.empty:
-            logger.warning(f"No hourly data for {symbol}")
+            logger.warning(f"No 15m data for {symbol}")
         return df
     except Exception as e:
-        logger.error(f"Error fetching hourly data for {symbol}: {e}")
+        logger.error(f"Error fetching 15m data for {symbol}: {e}")
         return pd.DataFrame()
 
 
 def fetch_all_crypto_hourly(symbols: list) -> dict:
-    """Fetch hourly data for all crypto symbols. Returns {alpaca_symbol: DataFrame}."""
+    """Fetch 15-minute data for all crypto symbols. Returns {alpaca_symbol: DataFrame}."""
     data = {}
     for symbol in symbols:
         df = fetch_crypto_data_hourly(symbol)
