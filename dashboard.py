@@ -26,6 +26,16 @@ _trader     = None
 _live       = None
 _start_time = time.time()
 
+# ETF state — updated by bot.py after each ETF strategy run
+_etf_universe: list = []
+_etf_signals:  list = []
+
+def update_etf_state(universe: list, signals: list) -> None:
+    """Called by bot.py after each ETF run so the dashboard can display current ETF info."""
+    global _etf_universe, _etf_signals
+    _etf_universe = universe
+    _etf_signals  = signals
+
 
 def _account_data() -> dict:
     try:
@@ -90,19 +100,58 @@ def _recent_trades(n: int = 30) -> list:
         return []
 
 
+def _market_status() -> dict:
+    """Return ETF market open/closed status and countdown (US Eastern time)."""
+    from datetime import timezone, timedelta
+    now_utc = datetime.now(timezone.utc)
+    # EDT = UTC-4 (Mar–Nov), EST = UTC-5 (Nov–Mar). March 31 = EDT.
+    # Simple rule: UTC offset is -4 from second Sunday of March to first Sunday of November
+    month = now_utc.month
+    et_offset = timedelta(hours=-4) if 3 <= month <= 10 else timedelta(hours=-5)
+    now_et = now_utc + et_offset
+
+    is_weekday   = now_et.weekday() < 5   # Mon=0 … Fri=4
+    market_open  = now_et.replace(hour=9,  minute=30, second=0, microsecond=0)
+    market_close = now_et.replace(hour=16, minute=0,  second=0, microsecond=0)
+    is_open      = is_weekday and market_open <= now_et <= market_close
+
+    def _fmt(td) -> str:
+        total = int(td.total_seconds())
+        h, r  = divmod(total, 3600)
+        m, s  = divmod(r, 60)
+        return f"{h}h {m}m" if h else f"{m}m {s}s"
+
+    if is_open:
+        return {"open": True,  "label": "OPEN",   "sub": f"closes in {_fmt(market_close - now_et)}",
+                "et_time": now_et.strftime("%H:%M ET")}
+    elif is_weekday and now_et < market_open:
+        return {"open": False, "label": "CLOSED", "sub": f"opens in {_fmt(market_open - now_et)}",
+                "et_time": now_et.strftime("%H:%M ET")}
+    else:
+        # Weekend — find next Monday open
+        days_ahead = (7 - now_et.weekday()) % 7 or 7
+        next_open  = (now_et + timedelta(days=days_ahead)).replace(
+                         hour=9, minute=30, second=0, microsecond=0)
+        return {"open": False, "label": "CLOSED", "sub": f"opens in {_fmt(next_open - now_et)} (Mon)",
+                "et_time": now_et.strftime("%H:%M ET")}
+
+
 def _bot_status() -> dict:
-    uptime_s = int(time.time() - _start_time)
-    h, r     = divmod(uptime_s, 3600)
-    m, s     = divmod(r, 60)
-    active   = sorted(_live._active_symbols) if _live else []
-    entries  = dict(_live._entries) if _live else {}
+    uptime_s     = int(time.time() - _start_time)
+    h, r         = divmod(uptime_s, 3600)
+    m, s         = divmod(r, 60)
+    refreshing   = _live._refreshing if _live else False
+    last_refresh = _live._last_refresh if _live else 0.0
+    active       = sorted(_live._active_symbols) if _live and _live._active_symbols else []
+    entries      = dict(_live._entries) if _live else {}
     return {
         "uptime":         f"{h}h {m}m {s}s",
         "active_symbols": active,
         "open_entries":   entries,
+        "refreshing":     refreshing,
         "last_refresh":   (
-            datetime.fromtimestamp(_live._last_refresh).strftime("%H:%M:%S")
-            if _live and _live._last_refresh else "—"
+            datetime.fromtimestamp(last_refresh).strftime("%H:%M:%S")
+            if last_refresh > 0 else ("Loading..." if refreshing else "Pending first refresh")
         ),
         "daily_halt":     _live._daily_halt if _live else False,
     }
@@ -238,9 +287,37 @@ def index():
             <tbody>{rows}</tbody>
         </table>"""
 
-    # Bot status
-    halt_badge = '<span style="color:#e74c3c;font-weight:600">⛔ HALTED</span>' if status["daily_halt"] else '<span style="color:#2ecc71">✅ ACTIVE</span>'
-    active_syms = ", ".join(status["active_symbols"]) or "—"
+    # Bot + market status
+    halt_badge  = '<span style="color:#e74c3c;font-weight:600">⛔ HALTED</span>' if status["daily_halt"] else '<span style="color:#2ecc71">✅ ACTIVE</span>'
+    active_syms = ", ".join(status["active_symbols"]) or (
+        '<span style="color:#f39c12">⏳ Loading data...</span>' if status["refreshing"]
+        else '<span style="color:#888">Pending first refresh</span>'
+    )
+    mkt         = _market_status()
+    mkt_color   = "#2ecc71" if mkt["open"] else "#e74c3c"
+    mkt_badge   = f'<span style="color:{mkt_color};font-weight:600">{mkt["label"]}</span>'
+
+    # Active ETF universe
+    if _etf_signals:
+        etf_rows = ""
+        for sig in sorted(_etf_signals, key=lambda x: x["score"], reverse=True):
+            sc    = sig["score"]
+            sc_color = "#2ecc71" if sc > 0 else ("#e74c3c" if sc < 0 else "#888")
+            sig_color = {"BUY": "#2ecc71", "SELL": "#e74c3c", "HOLD": "#888"}.get(sig["signal"], "#888")
+            etf_rows += f"""<tr>
+                <td><b>{sig["ticker"]}</b></td>
+                <td style="color:{sc_color}">{sc:+d}</td>
+                <td style="color:{sig_color};font-weight:600">{sig["signal"]}</td>
+                <td>${sig["price"]:.2f}</td>
+                <td style="color:#888;font-size:12px">{sig.get("regime","")}</td>
+            </tr>"""
+        etf_html = f"""
+        <table>
+            <thead><tr><th>Ticker</th><th>Score</th><th>Signal</th><th>Price</th><th>Regime</th></tr></thead>
+            <tbody>{etf_rows}</tbody>
+        </table>"""
+    else:
+        etf_html = '<p style="color:#888">No ETF data yet — market may be closed or first run pending</p>'
 
     # Open entries (manual stops/trails)
     if status["open_entries"]:
@@ -338,7 +415,7 @@ def index():
     <h2>Bot Status</h2>
     <div class="status-row">
         <div class="status-item">
-            <div class="status-label">Status</div>
+            <div class="status-label">Bot</div>
             <div class="status-value">{halt_badge}</div>
         </div>
         <div class="status-item">
@@ -346,11 +423,16 @@ def index():
             <div class="status-value">{status["uptime"]}</div>
         </div>
         <div class="status-item">
+            <div class="status-label">ETF Market ({mkt["et_time"]})</div>
+            <div class="status-value">{mkt_badge}</div>
+            <div class="card-sub" style="color:#8b949e">{mkt["sub"]}</div>
+        </div>
+        <div class="status-item">
             <div class="status-label">Last Data Refresh</div>
             <div class="status-value">{status["last_refresh"]}</div>
         </div>
         <div class="status-item">
-            <div class="status-label">Active Crypto Symbols</div>
+            <div class="status-label">Active Crypto</div>
             <div class="active-syms">{active_syms}</div>
         </div>
     </div>
@@ -360,6 +442,9 @@ def index():
 
     <h2>Crypto Entry Tracking (Trailing Stops)</h2>
     {entries_html}
+
+    <h2>ETF Signals (last run)</h2>
+    {etf_html}
 
     <h2>Performance Stats</h2>
     {perf_html}

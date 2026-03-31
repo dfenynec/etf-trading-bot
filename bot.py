@@ -29,7 +29,7 @@ from strategy import rank_buy_candidates, rank_sell_candidates, score_etf
 from trader import AlpacaTrader
 from live_trader import LiveCryptoTrader
 from trade_journal import log_trade
-from dashboard import start_dashboard
+from dashboard import start_dashboard, update_etf_state
 import db
 
 # --- Logging setup ---
@@ -127,6 +127,7 @@ def run_etf_strategy() -> None:
         signals.append(signal)
 
     print_signal_table(signals, label="ETF")
+    update_etf_state(universe, signals)  # Push to dashboard
 
     # --- Manage existing long positions ---
     for ticker in list(long_positions.keys()):
