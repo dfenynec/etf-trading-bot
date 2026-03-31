@@ -68,6 +68,13 @@ def init_db() -> bool:
                     updated_at   TIMESTAMPTZ DEFAULT NOW()
                 );
             """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS learned_weights (
+                    id         INT PRIMARY KEY DEFAULT 1,
+                    weights    TEXT,
+                    updated_at TIMESTAMPTZ DEFAULT NOW()
+                );
+            """)
         logger.info("[DB] Tables ready (trades, open_entries)")
         return True
     except Exception as e:

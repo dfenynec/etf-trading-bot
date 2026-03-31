@@ -75,7 +75,7 @@ CRYPTO_CANDIDATES = [
     # Payments / store of value
     "LTC/USD", "BCH/USD",
     # High momentum / newer
-    "SUI/USD", "WIF/USD", "SHIB/USD",
+    "WIF/USD", "SHIB/USD",
     # BTC kept for correlation filter — fetched separately in live_trader.py
     "BTC/USD",
 ]
