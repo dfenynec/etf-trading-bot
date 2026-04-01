@@ -156,24 +156,28 @@ class LiveCryptoTrader:
                 current_price = float(pos.current_price) if pos.current_price else entry_price
 
                 if qty < 0:  # Short position
-                    stop = round(entry_price * (1 + 0.04), 6)  # 4% above entry
+                    stop = round(entry_price * (1 + STOP_LOSS_MAX_PCT), 6)
+                    tp   = round(entry_price * (1 - TAKE_PROFIT_MAX_PCT), 6)
                     self._entries[alpaca_sym] = {
                         "side":         "short",
                         "price":        entry_price,
                         "atr":          entry_price * 0.02,
                         "stop":         stop,
+                        "tp":           tp,
                         "trough_price": current_price,
                         "orig_qty":     abs(qty),
                         "pyramided":    True,
                         "trail_active": False,
                     }
                 else:  # Long position
-                    stop = round(entry_price * 0.96, 6)  # 4% below entry
+                    stop = round(entry_price * (1 - STOP_LOSS_MAX_PCT), 6)
+                    tp   = round(entry_price * (1 + TAKE_PROFIT_MAX_PCT), 6)
                     self._entries[alpaca_sym] = {
                         "side":        "long",
                         "price":       entry_price,
                         "atr":         entry_price * 0.02,
                         "stop":        stop,
+                        "tp":          tp,
                         "peak_price":  current_price,
                         "orig_qty":    qty,
                         "pyramided":   True,
@@ -185,6 +189,21 @@ class LiveCryptoTrader:
                 )
             if self._entries:
                 self._save_entries()
+
+            # Patch any existing entries that were created before TP was added
+            patched = 0
+            for sym, entry in self._entries.items():
+                if "tp" not in entry or entry["tp"] is None:
+                    ep = entry["price"]
+                    if entry.get("side") == "short":
+                        entry["tp"] = round(ep * (1 - TAKE_PROFIT_MAX_PCT), 6)
+                    else:
+                        entry["tp"] = round(ep * (1 + TAKE_PROFIT_MAX_PCT), 6)
+                    patched += 1
+            if patched:
+                logger.info(f"[LIVE] Patched TP targets on {patched} existing entries")
+                self._save_entries()
+
         except Exception as e:
             logger.error(f"[LIVE] Position recovery failed: {e}")
 
