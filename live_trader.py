@@ -35,7 +35,7 @@ from config import (
     BTC_CORRELATION_FILTER, POSITION_CACHE_TTL,
     PYRAMID_TRIGGER_PCT, PYRAMID_ADD_PCT,
     LOSS_THROTTLE_AFTER, RISK_PER_TRADE_PCT,
-    STOP_LOSS_MAX_PCT,
+    STOP_LOSS_MAX_PCT, TAKE_PROFIT_MAX_PCT,
 )
 from screener import CRYPTO_CANDIDATES, screen_crypto
 from data_fetcher import fetch_all_crypto, fetch_all_crypto_hourly
