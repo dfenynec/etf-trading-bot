@@ -103,19 +103,36 @@ class LiveCryptoTrader:
         """Load open entries from DB (primary) or JSON file (fallback)."""
         import db as _db
         entries = _db.load_all_entries()
-        if entries:
-            return entries
-        # Fallback: JSON file from previous version
-        if os.path.exists(ENTRIES_FILE):
-            try:
-                with open(ENTRIES_FILE) as f:
-                    entries = json.load(f)
-                if entries:
-                    logger.info(f"[LIVE] Restored {len(entries)} entries from JSON fallback")
-                return entries
-            except Exception as e:
-                logger.error(f"[LIVE] JSON fallback load failed: {e}")
-        return {}
+        if not entries:
+            # Fallback: JSON file from previous version
+            if os.path.exists(ENTRIES_FILE):
+                try:
+                    with open(ENTRIES_FILE) as f:
+                        entries = json.load(f)
+                    if entries:
+                        logger.info(f"[LIVE] Restored {len(entries)} entries from JSON fallback")
+                except Exception as e:
+                    logger.error(f"[LIVE] JSON fallback load failed: {e}")
+                    entries = {}
+            else:
+                entries = {}
+
+        # Patch entries missing tp (created before TP was added)
+        patched = 0
+        for sym, entry in entries.items():
+            if "tp" not in entry or entry.get("tp") is None:
+                ep = entry["price"]
+                if entry.get("side") == "short":
+                    entry["tp"] = round(ep * (1 - TAKE_PROFIT_MAX_PCT), 6)
+                else:
+                    entry["tp"] = round(ep * (1 + TAKE_PROFIT_MAX_PCT), 6)
+                patched += 1
+                _db.save_entry(sym, entry)
+        if patched:
+            logger.info(f"[LIVE] Patched TP targets on {patched} entries: "
+                        + ", ".join(f"{s}→${entries[s]['tp']:.2f}" for s in entries if entries[s].get("tp")))
+
+        return entries
 
     def _save_entries(self) -> None:
         """Persist all current entries to DB. Also write JSON as backup."""
