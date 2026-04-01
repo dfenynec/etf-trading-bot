@@ -627,6 +627,14 @@ class LiveCryptoTrader:
         # For held-but-not-active symbols (e.g. BTC excluded from screener):
         # only check exit conditions — skip signal generation and new buys/sells
         if is_held and not in_active:
+            entry = self._entries.get(alpaca_sym, {})
+            tp = entry.get("tp")
+            stop = entry.get("stop")
+            logger.info(
+                f"[LIVE] {symbol} (held, not active) ${price:.2f} | "
+                f"tp={'$'+f'{tp:.2f}' if tp else 'NONE'} | "
+                f"stop={'$'+f'{stop:.2f}' if stop else 'NONE'}"
+            )
             positions = self._get_cached_positions()
             if alpaca_sym in positions:
                 self._check_exit_conditions(alpaca_sym, symbol, price)
