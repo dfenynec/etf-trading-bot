@@ -265,8 +265,14 @@ def main() -> None:
     safe_etf_run()
     schedule.every(RUN_INTERVAL_MINUTES).minutes.do(safe_etf_run)
 
+    # Record equity snapshots every loop iteration (throttled to 5 min in db.py)
     while True:
         schedule.run_pending()
+        try:
+            account = trader.get_account()
+            db.insert_equity_snapshot(float(account.equity), float(account.cash))
+        except Exception:
+            pass
         time.sleep(30)
 
 

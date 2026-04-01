@@ -75,6 +75,17 @@ def init_db() -> bool:
                     updated_at TIMESTAMPTZ DEFAULT NOW()
                 );
             """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS equity_snapshots (
+                    id      SERIAL PRIMARY KEY,
+                    ts      TIMESTAMPTZ DEFAULT NOW(),
+                    equity  DOUBLE PRECISION,
+                    cash    DOUBLE PRECISION
+                );
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_equity_ts ON equity_snapshots (ts);
+            """)
         logger.info("[DB] Tables ready (trades, open_entries)")
         return True
     except Exception as e:
@@ -273,6 +284,55 @@ def get_all_trades() -> list:
             return [dict(zip(cols, row)) for row in cur.fetchall()]
     except Exception as e:
         logger.error(f"[DB] get_all_trades failed: {e}")
+        return []
+
+
+def insert_equity_snapshot(equity: float, cash: float) -> bool:
+    """Record a portfolio equity snapshot. Throttled: skips if last snapshot < 5 min ago."""
+    conn = get_conn()
+    if not conn:
+        return False
+    try:
+        with conn.cursor() as cur:
+            # Throttle: only insert if last snapshot is older than 5 minutes
+            cur.execute("""
+                SELECT ts FROM equity_snapshots ORDER BY ts DESC LIMIT 1
+            """)
+            row = cur.fetchone()
+            if row:
+                from datetime import datetime, timezone, timedelta
+                last_ts = row[0]
+                if last_ts.tzinfo is None:
+                    from datetime import timezone as tz
+                    last_ts = last_ts.replace(tzinfo=tz.utc)
+                now = datetime.now(timezone.utc)
+                if (now - last_ts) < timedelta(minutes=5):
+                    return False  # Too soon
+
+            cur.execute("""
+                INSERT INTO equity_snapshots (equity, cash) VALUES (%s, %s)
+            """, (equity, cash))
+        return True
+    except Exception as e:
+        logger.error(f"[DB] insert_equity_snapshot failed: {e}")
+        return False
+
+
+def get_equity_history(limit: int = 500) -> list:
+    """Return equity snapshots ordered by time ASC."""
+    conn = get_conn()
+    if not conn:
+        return []
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT ts, equity, cash FROM equity_snapshots
+                ORDER BY ts ASC LIMIT %s
+            """, (limit,))
+            return [{"ts": row[0].isoformat(), "equity": row[1], "cash": row[2]}
+                    for row in cur.fetchall()]
+    except Exception as e:
+        logger.error(f"[DB] get_equity_history failed: {e}")
         return []
 
 
